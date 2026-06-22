@@ -1,0 +1,20 @@
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class RelaySettings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_prefix="CHAMELEON_",
+        env_file=".env",
+        env_file_encoding="utf-8",
+    )
+
+    MY_DOMAIN: str
+    RELAY_HOSTNAME: str
+    LISTEN_HOST: str = "0.0.0.0"
+    LISTEN_PORT: int = 1025
+    LOCAL_SMTP_HOST: str = "127.0.0.1"
+    LOCAL_SMTP_PORT: int = 2525
+    MAX_MESSAGE_SIZE: int = 26_214_400
+    LOG_LEVEL: str = "INFO"
+    TLS_CERT_PATH: str | None = None
+    TLS_KEY_PATH: str | None = None

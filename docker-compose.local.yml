@@ -1,0 +1,29 @@
+services:
+  local:
+    build:
+      context: services/local
+    image: chameleon-local:latest
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:2525:2525"   # only reachable from loopback; frpc connects here
+    env_file: services/local/.env
+    volumes:
+      - maildir:/srv/mail/chameleon
+    user: "5000:5000"
+
+  dovecot:
+    image: dovecot/dovecot:latest
+    restart: unless-stopped
+    ports:
+      - "143:143"
+      - "993:993"
+    volumes:
+      - ./config/dovecot:/etc/dovecot:ro
+      - maildir:/srv/mail/chameleon
+    environment:
+      DOVECOT_PASS: "${IMAP_PASSWORD}"
+    depends_on:
+      - local
+
+volumes:
+  maildir:

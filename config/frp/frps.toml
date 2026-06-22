@@ -1,0 +1,11 @@
+# frp server config — runs on the VPS alongside the relay container
+# Download: https://github.com/fatedier/frp/releases
+# Run: ./frps -c frps.toml
+
+bindPort = 7000
+
+auth.method = "token"
+auth.token = "CHANGE_ME_STRONG_RANDOM_SECRET"
+
+log.level = "info"
+log.maxDays = 3

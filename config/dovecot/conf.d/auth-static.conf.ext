@@ -1,0 +1,9 @@
+passdb {
+  driver = static
+  args = password=%{env:DOVECOT_PASS}
+}
+
+userdb {
+  driver = static
+  args = uid=5000 gid=5000 home=/srv/mail/chameleon
+}

@@ -1,0 +1,17 @@
+services:
+  relay:
+    build:
+      context: services/relay
+    image: chameleon-relay:latest
+    restart: unless-stopped
+    # host networking: binds directly to port 25 on the VPS and can reach
+    # 127.0.0.1:2525 where frps opens the tunnel to the home server
+    network_mode: host
+    env_file: services/relay/.env
+    volumes:
+      - ./config/relay/tls:/tls:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; s=socket.create_connection(('127.0.0.1',1025),2); s.close()"]
+      interval: 30s
+      timeout: 5s
+      retries: 3

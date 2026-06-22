@@ -1,0 +1,19 @@
+# frp client config — runs on the home server
+# Download: https://github.com/fatedier/frp/releases
+# Run: ./frpc -c frpc.toml
+
+serverAddr = "YOUR_VPS_IP"
+serverPort = 7000
+
+auth.method = "token"
+auth.token = "CHANGE_ME_STRONG_RANDOM_SECRET"
+
+log.level = "info"
+log.maxDays = 3
+
+[[proxies]]
+name = "chameleon-smtp"
+type = "tcp"
+localIP = "127.0.0.1"
+localPort = 2525        # where chameleon-local listens on the home server
+remotePort = 2525       # port frps opens on the VPS for the relay to reach
