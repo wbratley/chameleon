@@ -16,7 +16,6 @@ def test_defaults_applied():
     assert s.API_HOST == "127.0.0.1"
     assert s.API_PORT == 8080
     assert s.QUEUE_DB_PATH == "/data/queue.db"
-    assert s.QUEUE_RETAIN_MINUTES == 30
     assert s.TLS_CERT_PATH is None
     assert s.TLS_KEY_PATH is None
 

@@ -34,7 +34,7 @@ async def main(settings: RelaySettings) -> None:
     # Capture the loop before starting the Controller, which spawns its own thread+loop.
     loop = asyncio.get_running_loop()
 
-    queue = MessageQueue(settings.QUEUE_DB_PATH, settings.QUEUE_RETAIN_MINUTES)
+    queue = MessageQueue(settings.QUEUE_DB_PATH)
     await queue.setup()
 
     app, broadcaster = make_app(settings, queue)

@@ -17,7 +17,6 @@ class RelaySettings(BaseSettings):
     API_PORT: int = 8080
     API_TOKEN: str
     QUEUE_DB_PATH: str = "/data/queue.db"
-    QUEUE_RETAIN_MINUTES: int = 30
     LOG_LEVEL: str = "INFO"
     TLS_CERT_PATH: str | None = None
     TLS_KEY_PATH: str | None = None

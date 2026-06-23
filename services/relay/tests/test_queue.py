@@ -41,26 +41,6 @@ async def test_ack_does_not_remove_other_messages(queue):
     assert pending[0][0] == id1
 
 
-async def test_sweep_deletes_old_delivered(queue):
-    msg_id = await queue.enqueue(SAMPLE)
-    await queue.ack(msg_id)
-    await queue._conn.execute(
-        "UPDATE messages SET delivered_at = '2000-01-01T00:00:00.000Z' WHERE id = ?",
-        (msg_id,),
-    )
-    await queue._conn.commit()
-    deleted = await queue.sweep()
-    assert deleted >= 1
-    assert await queue.pending() == []
-
-
-async def test_sweep_keeps_recent_delivered(queue):
-    msg_id = await queue.enqueue(SAMPLE)
-    await queue.ack(msg_id)
-    deleted = await queue.sweep()
-    assert deleted == 0
-
-
 async def test_sweep_deletes_old_undelivered(queue):
     msg_id = await queue.enqueue(SAMPLE)
     await queue._conn.execute(
