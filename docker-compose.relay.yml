@@ -4,14 +4,18 @@ services:
       context: services/relay
     image: chameleon-relay:latest
     restart: unless-stopped
-    # host networking: binds directly to port 25 on the VPS and can reach
-    # 127.0.0.1:2525 where frps opens the tunnel to the home server
+    # host networking: binds directly to port 1025 (redirect 25→1025 via iptables)
+    # and makes 127.0.0.1:8080 reachable by nginx on the host
     network_mode: host
     env_file: services/relay/.env
     volumes:
+      - queue-data:/data
       - ./config/relay/tls:/tls:ro
     healthcheck:
-      test: ["CMD", "python", "-c", "import socket; s=socket.create_connection(('127.0.0.1',1025),2); s.close()"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health')"]
       interval: 30s
       timeout: 5s
       retries: 3
+
+volumes:
+  queue-data:

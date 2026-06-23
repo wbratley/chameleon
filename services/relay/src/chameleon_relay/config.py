@@ -12,9 +12,12 @@ class RelaySettings(BaseSettings):
     RELAY_HOSTNAME: str
     LISTEN_HOST: str = "0.0.0.0"
     LISTEN_PORT: int = 1025
-    LOCAL_SMTP_HOST: str = "127.0.0.1"
-    LOCAL_SMTP_PORT: int = 2525
     MAX_MESSAGE_SIZE: int = 26_214_400
+    API_HOST: str = "127.0.0.1"
+    API_PORT: int = 8080
+    API_TOKEN: str
+    QUEUE_DB_PATH: str = "/data/queue.db"
+    QUEUE_RETAIN_MINUTES: int = 30
     LOG_LEVEL: str = "INFO"
     TLS_CERT_PATH: str | None = None
     TLS_KEY_PATH: str | None = None

@@ -1,66 +1,60 @@
 # Chameleon Phase 1 — Setup Guide
 
-This guide walks through deploying the inbound mail relay on a VPS and the local server on your home machine, then connecting them with an frp tunnel.
+Mail flows inbound → relay (VPS) → SQLite queue → WebSocket API → local server → Maildir → Dovecot → IMAP client.
+
+The local server connects outbound to the relay. No tunnel, no inbound ports required on the home server.
 
 ## Prerequisites
 
 - A domain you control with the ability to set MX and A records
-- A VPS (any cloud provider) with a public IP — this is your relay
-- A home server or NAS running Docker Compose — this is your local mail store
-- Docker and Docker Compose installed on both machines
+- A VPS with a public IP — this runs the relay
+- A home server or NAS running Docker Compose — this stores your mail
+- Docker and Docker Compose on both machines
+- nginx + certbot on the VPS (TLS termination for the WebSocket API)
 
 ## 1. DNS
 
-Point your domain's MX record at your VPS:
+Point your domain's MX record at the VPS:
 
 ```
-@   MX  10  mail.yourdomain.com.
-mail  A     <VPS_IP>
+@     MX  10  mail.yourdomain.com.
+mail  A       <VPS_IP>
 ```
 
-Allow port 25 inbound on the VPS firewall.
+Allow ports 25 (SMTP inbound) and 443 (HTTPS/WSS) on the VPS firewall.
 
-## 2. Install frp
+## 2. Deploy the relay (VPS)
 
-Download the frp binary on **both** the VPS and the home server from:
-https://github.com/fatedier/frp/releases
+### 2a. Configure nginx + TLS
 
-Choose the `linux_amd64` archive. Extract and keep `frps` on the VPS and `frpc` on the home server.
+Copy `config/nginx/chameleon.conf` to `/etc/nginx/conf.d/chameleon.conf`.  
+Replace `relay.yourdomain.com` with your actual hostname.
 
-## 3. Configure the tunnel
-
-Copy the templates and fill in your values:
-
-**VPS** — edit `config/frp/frps.toml`:
-- Replace `CHANGE_ME_STRONG_RANDOM_SECRET` with a random string (e.g. `openssl rand -hex 32`)
-
-**Home server** — edit `config/frp/frpc.toml`:
-- Set `serverAddr` to your VPS IP
-- Set `auth.token` to the same secret as frps
-
-Run on VPS:
+Obtain a certificate:
 ```bash
-./frps -c config/frp/frps.toml
+certbot --nginx -d relay.yourdomain.com
 ```
 
-Run on home server:
+### 2b. Port 25 redirect
+
+The relay container listens on port 1025 to avoid needing root. Redirect port 25 to it:
+
 ```bash
-./frpc -c config/frp/frpc.toml
+iptables -t nat -A PREROUTING -p tcp --dport 25 -j REDIRECT --to-port 1025
+# Make persistent:
+iptables-save > /etc/iptables/rules.v4
 ```
 
-Once connected, port 2525 on the VPS localhost will forward to port 2525 on the home server.
-
-## 4. Configure the relay (VPS)
+### 2c. Configure and start
 
 ```bash
 cp services/relay/.env.example services/relay/.env
 ```
 
-Edit `services/relay/.env`:
-```
-CHAMELEON_MY_DOMAIN=yourdomain.com
-CHAMELEON_RELAY_HOSTNAME=mail.yourdomain.com
-CHAMELEON_LISTEN_PORT=25
+Edit `services/relay/.env` — set your domain, hostname, and generate a strong API token:
+
+```bash
+openssl rand -hex 32  # use this as CHAMELEON_API_TOKEN
 ```
 
 Build and start:
@@ -68,43 +62,59 @@ Build and start:
 docker compose -f docker-compose.relay.yml up -d
 ```
 
-The relay container uses host networking and listens directly on port 25.
+Verify it's healthy:
+```bash
+docker compose -f docker-compose.relay.yml ps
+curl http://127.0.0.1:8080/health
+```
 
-## 5. Configure the local server (home)
+## 3. Deploy the local server (home)
+
+### 3a. Configure
 
 ```bash
 cp services/local/.env.example services/local/.env
 ```
 
-Set an IMAP password in a `.env` file at the repo root:
+Edit `services/local/.env`:
+- Set `CHAMELEON_RELAY_WS_URL=wss://relay.yourdomain.com/ws`
+- Set `CHAMELEON_RELAY_TOKEN` to the same value as `CHAMELEON_API_TOKEN` on the relay
+
+Set an IMAP password:
 ```bash
 echo "IMAP_PASSWORD=your_strong_password_here" > .env
 ```
 
-Build and start:
+### 3b. Start
+
 ```bash
 docker compose -f docker-compose.local.yml up -d
 ```
 
 This starts:
-- `chameleon-local` on `127.0.0.1:2525` — receives mail from the relay via tunnel
+- `chameleon-local` — connects outbound to the relay WebSocket API and delivers mail to Maildir
 - `dovecot` on ports 143 (IMAP) and 993 (IMAPS) — exposes your Maildir to mail clients
 
-## 6. Connect a mail client
+Check that the local service connected:
+```bash
+docker compose -f docker-compose.local.yml logs local
+# Should show: connected url=wss://relay.yourdomain.com/ws
+```
+
+## 4. Connect a mail client
 
 Configure any IMAP client (Thunderbird, Apple Mail, mutt) with:
 
-| Setting      | Value                  |
-|--------------|------------------------|
-| IMAP server  | your home server IP    |
-| Port         | 143                    |
-| Security     | None (local network)   |
-| Username     | any string (e.g. `me`) |
-| Password     | value from `.env`      |
+| Setting     | Value                          |
+|-------------|--------------------------------|
+| IMAP server | your home server IP or hostname |
+| Port        | 143                            |
+| Security    | None (local network) or STARTTLS if you add a cert to Dovecot |
+| Username    | any string (e.g. `me`)        |
+| Password    | value from `IMAP_PASSWORD`    |
 
-## 7. Send a test email
+## 5. Send a test email
 
-From any machine:
 ```bash
 swaks --to test@yourdomain.com --server mail.yourdomain.com
 ```
@@ -123,14 +133,16 @@ Hello Chameleon.
 QUIT
 ```
 
-Check your IMAP client — the message should appear in the inbox within seconds.
+The message should appear in your IMAP inbox within seconds. If the local server was offline when mail arrived, it will be delivered the moment it reconnects.
 
 ## Troubleshooting
 
-**Mail not arriving**: check relay logs with `docker compose -f docker-compose.relay.yml logs relay`. Look for `forward_failed` — this means the relay can't reach the local server via the tunnel.
+**No mail arriving at relay**: check relay logs (`docker compose -f docker-compose.relay.yml logs relay`). Confirm port 25 reaches the container: `telnet localhost 1025` from the VPS.
 
-**Tunnel not connecting**: ensure frps is running on the VPS and frpc on the home server. Check that port 7000 is open on the VPS firewall.
+**Local server not connecting**: check `docker compose -f docker-compose.local.yml logs local`. Verify `CHAMELEON_RELAY_WS_URL` and `CHAMELEON_RELAY_TOKEN` match the relay config. Test the WebSocket endpoint: `curl -i -N -H "Connection: Upgrade" -H "Upgrade: websocket" -H "Authorization: Bearer <token>" https://relay.yourdomain.com/ws`.
 
-**IMAP login failing**: verify `DOVECOT_PASS` in the root `.env` matches what your client is sending.
+**IMAP login failing**: verify `DOVECOT_PASS` in the root `.env` matches what your client sends.
 
-**Permission errors on Maildir**: both `chameleon-local` and `dovecot` must own files as uid 5000. The Docker Compose `user: "5000:5000"` and Dovecot's `userdb static args = uid=5000 gid=5000` enforce this.
+**Mail queued but not delivered**: if the relay has messages in the queue (`docker exec -it <relay> sqlite3 /data/queue.db "SELECT id, received_at, delivered FROM messages"`), the local server isn't processing them. Check the token matches and the WebSocket connection is established.
+
+**Permission errors on Maildir**: both `chameleon-local` and `dovecot` run as uid 5000 (`vmail`). The Docker Compose `user: "5000:5000"` and Dovecot's `userdb static args = uid=5000 gid=5000` enforce this. If the volume was created with wrong permissions, run `docker compose -f docker-compose.local.yml down -v` and recreate.

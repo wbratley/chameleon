@@ -4,8 +4,7 @@ services:
       context: services/local
     image: chameleon-local:latest
     restart: unless-stopped
-    ports:
-      - "127.0.0.1:2525:2525"   # only reachable from loopback; frpc connects here
+    # No inbound ports — client connects outbound to relay WebSocket API
     env_file: services/local/.env
     volumes:
       - maildir:/srv/mail/chameleon

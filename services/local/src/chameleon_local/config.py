@@ -8,12 +8,7 @@ class LocalSettings(BaseSettings):
         env_file_encoding="utf-8",
     )
 
-    LISTEN_HOST: str = "127.0.0.1"
-    LISTEN_PORT: int = 2525
+    RELAY_WS_URL: str
+    RELAY_TOKEN: str
     MAILDIR_PATH: str = "/srv/mail/chameleon"
-    ALLOWED_PEERS: str = "127.0.0.1"
     LOG_LEVEL: str = "INFO"
-
-    @property
-    def allowed_peer_set(self) -> set[str]:
-        return {p.strip() for p in self.ALLOWED_PEERS.split(",")}

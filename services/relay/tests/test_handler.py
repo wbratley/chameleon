@@ -1,7 +1,9 @@
-from unittest.mock import AsyncMock, patch
+from concurrent.futures import Future as ConcurrentFuture
+from unittest.mock import patch
 
-import aiosmtplib
 import pytest
+
+from chameleon_relay.handler import RelayHandler
 
 
 async def test_rcpt_accepts_configured_domain(handler, envelope, session):
@@ -20,65 +22,71 @@ async def test_rcpt_rejects_foreign_domain(handler, envelope, session):
     assert result.startswith("550")
 
 
-async def test_data_calls_send_with_correct_args(handler, envelope, session):
-    envelope.rcpt_tos = ["user@example.com"]
-    with patch("chameleon_relay.handler.aiosmtplib.send", new_callable=AsyncMock) as mock_send:
+async def test_rcpt_domain_check_is_case_insensitive(handler, envelope, session):
+    result = await handler.handle_RCPT(None, session, envelope, "user@EXAMPLE.COM", [])
+    assert result == "250 OK"
+
+
+async def test_enqueue_and_broadcast_calls_queue_then_broadcaster(
+    handler, mock_queue, broadcaster
+):
+    msg_id = await handler._enqueue_and_broadcast(b"raw message")
+    mock_queue.enqueue.assert_awaited_once_with(b"raw message")
+    broadcaster.broadcast.assert_awaited_once()
+    assert msg_id == 42
+
+
+async def test_data_returns_250_on_success(handler, envelope, session):
+    f: ConcurrentFuture[int] = ConcurrentFuture()
+    f.set_result(42)
+    with patch("chameleon_relay.handler.asyncio.run_coroutine_threadsafe", return_value=f):
         result = await handler.handle_DATA(None, session, envelope)
     assert result == "250 OK"
-    mock_send.assert_awaited_once()
-    args, kwargs = mock_send.call_args
-    assert kwargs["sender"] == "sender@external.com"
-    assert kwargs["recipients"] == ["user@example.com"]
-    assert kwargs["hostname"] == "127.0.0.1"
-    assert kwargs["port"] == 2525
 
 
-async def test_data_prepends_received_header(handler, envelope, session):
-    envelope.rcpt_tos = ["user@example.com"]
-    captured: dict = {}
-
-    async def capture(msg, **kwargs):
-        captured["message"] = msg
-
-    with patch("chameleon_relay.handler.aiosmtplib.send", side_effect=capture):
-        await handler.handle_DATA(None, session, envelope)
-
-    assert captured["message"].startswith(b"Received:")
-    assert envelope.content in captured["message"]
-
-
-async def test_received_header_omits_recipient(handler, envelope, session):
-    envelope.rcpt_tos = ["user@example.com"]
-    captured: dict = {}
-
-    async def capture(msg, **kwargs):
-        captured["message"] = msg
-
-    with patch("chameleon_relay.handler.aiosmtplib.send", side_effect=capture):
-        await handler.handle_DATA(None, session, envelope)
-
-    # Extract only the injected Received header (before the original content)
-    injected = captured["message"][: captured["message"].index(envelope.content)]
-    assert b"user@example.com" not in injected
-
-
-async def test_data_returns_421_on_smtp_exception(handler, envelope, session):
-    envelope.rcpt_tos = ["user@example.com"]
-    with patch(
-        "chameleon_relay.handler.aiosmtplib.send",
-        new_callable=AsyncMock,
-        side_effect=aiosmtplib.SMTPException("Connection refused"),
-    ):
+async def test_data_returns_421_on_enqueue_failure(handler, envelope, session):
+    f: ConcurrentFuture[int] = ConcurrentFuture()
+    f.set_exception(Exception("db error"))
+    with patch("chameleon_relay.handler.asyncio.run_coroutine_threadsafe", return_value=f):
         result = await handler.handle_DATA(None, session, envelope)
     assert result.startswith("421")
 
 
-async def test_data_returns_421_on_os_error(handler, envelope, session):
-    envelope.rcpt_tos = ["user@example.com"]
-    with patch(
-        "chameleon_relay.handler.aiosmtplib.send",
-        new_callable=AsyncMock,
-        side_effect=OSError("Connection refused"),
-    ):
+async def test_data_returns_421_on_timeout(handler, envelope, session):
+    f: ConcurrentFuture[int] = ConcurrentFuture()
+    f.set_exception(TimeoutError())
+    with patch("chameleon_relay.handler.asyncio.run_coroutine_threadsafe", return_value=f):
         result = await handler.handle_DATA(None, session, envelope)
     assert result.startswith("421")
+
+
+async def test_data_received_header_omits_recipient(handler, envelope, session):
+    """Received header must not contain the recipient alias address."""
+    envelope.rcpt_tos = ["private@example.com"]
+    envelope.content = b"Subject: Test\r\n\r\nBody"
+    captured_msgs: list[bytes] = []
+
+    async def spy(msg: bytes) -> int:
+        captured_msgs.append(msg)
+        return 1
+
+    # Patch the method BEFORE handle_DATA is called so the coroutine it creates
+    # is already bound to the spy, not the original method.
+    handler._enqueue_and_broadcast = spy
+
+    f: ConcurrentFuture[int] = ConcurrentFuture()
+    f.set_result(1)
+    with patch(
+        "chameleon_relay.handler.asyncio.run_coroutine_threadsafe", return_value=f
+    ) as mock_rcts:
+        await handler.handle_DATA(None, session, envelope)
+
+    # Await the coroutine that was handed to run_coroutine_threadsafe
+    coro = mock_rcts.call_args[0][0]
+    await coro
+
+    assert len(captured_msgs) == 1
+    msg = captured_msgs[0]
+    received_section = msg[: msg.index(envelope.content)]
+    assert b"private@example.com" not in received_section
+    assert received_section.startswith(b"Received:")
