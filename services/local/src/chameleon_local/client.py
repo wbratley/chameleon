@@ -1,25 +1,47 @@
 import asyncio
 import base64
+import email as email_lib
 import json
 import logging
+from email.utils import parseaddr
 
 import aiohttp
 from aiohttp import WSMsgType
 
+from .aliases import AliasDB
 from .config import LocalSettings
 from .delivery import deliver
 
 logger = logging.getLogger(__name__)
 
 
+def _extract_to(raw: bytes) -> str | None:
+    try:
+        msg = email_lib.message_from_bytes(raw)
+        _, addr = parseaddr(msg.get("To", ""))
+        return addr.lower() or None
+    except Exception:
+        return None
+
+
 async def _handle_deliver(
     ws: aiohttp.ClientWebSocketResponse,
     settings: LocalSettings,
+    alias_db: AliasDB,
     data: dict,
 ) -> None:
     msg_id = data["id"]
     try:
         raw = base64.b64decode(data["message"])
+
+        to_addr = _extract_to(raw)
+        if to_addr is not None:
+            should_deliver = await alias_db.record_delivery(to_addr)
+            if not should_deliver:
+                logger.info("burned id=%d address=%s", msg_id, to_addr)
+                await ws.send_json({"type": "ack", "id": msg_id})
+                return
+
         key = await deliver(settings.MAILDIR_PATH, raw)
         logger.info("delivered id=%d key=%s", msg_id, key)
         await ws.send_json({"type": "ack", "id": msg_id})
@@ -28,7 +50,7 @@ async def _handle_deliver(
         logger.error("delivery_failed id=%d error=%s", msg_id, type(exc).__name__)
 
 
-async def run_client(settings: LocalSettings) -> None:
+async def run_client(settings: LocalSettings, alias_db: AliasDB) -> None:
     backoff = 1.0
     max_backoff = 60.0
 
@@ -48,7 +70,7 @@ async def run_client(settings: LocalSettings) -> None:
                             try:
                                 data = json.loads(msg.data)
                                 if data.get("type") == "deliver":
-                                    await _handle_deliver(ws, settings, data)
+                                    await _handle_deliver(ws, settings, alias_db, data)
                             except (json.JSONDecodeError, KeyError, TypeError):
                                 logger.warning("malformed_frame")
                         elif msg.type in (WSMsgType.ERROR, WSMsgType.CLOSE):

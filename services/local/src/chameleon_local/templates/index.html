@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Chameleon</h1>
+
+<form class="new-alias"
+      hx-post="/aliases"
+      hx-target="#alias-body"
+      hx-swap="afterbegin"
+      hx-on::after-request="this.reset()">
+  <input type="text" name="service" placeholder="Service name (e.g. Netflix)" required autocomplete="off">
+  <button type="submit">Generate alias</button>
+</form>
+
+<table>
+  <thead>
+    <tr>
+      <th>Service</th>
+      <th>Address</th>
+      <th>Created</th>
+      <th>Emails</th>
+      <th>Last received</th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody id="alias-body">
+    {% for alias in aliases %}
+    {% include "_alias_row.html" %}
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chameleon</title>
+  <script src="https://unpkg.com/htmx.org@1.9.12" integrity="sha384-ujb1lZYygJmzgSwoxRggbCHcjc0rB2uQ8zjIekXkIwwkiuFL0VqAreRSejdMQIb" crossorigin="anonymous"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    body { font-family: system-ui, -apple-system, sans-serif; max-width: 960px; margin: 2rem auto; padding: 0 1rem; color: #1a1a1a; background: #fafafa; }
+    h1 { font-size: 1.4rem; font-weight: 600; margin-bottom: 1.5rem; letter-spacing: -0.01em; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.875rem; background: #fff; border-radius: 6px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+    thead { background: #f0f0f0; }
+    th { text-align: left; padding: 0.6rem 0.875rem; font-weight: 600; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.04em; color: #555; }
+    td { padding: 0.6rem 0.875rem; border-top: 1px solid #f0f0f0; vertical-align: middle; }
+    tr.burned td { color: #aaa; text-decoration: line-through; }
+    tr.burned td.no-strike { text-decoration: none; }
+    code { background: #f4f4f4; padding: 0.15em 0.35em; border-radius: 3px; font-size: 0.82em; font-family: ui-monospace, monospace; }
+    tr.burned code { color: #bbb; }
+    button.burn { background: #e53935; color: #fff; border: none; padding: 0.25rem 0.65rem; border-radius: 4px; font-size: 0.8rem; cursor: pointer; }
+    button.burn:hover:not(:disabled) { background: #c62828; }
+    button.burn:disabled { background: #ddd; color: #aaa; cursor: default; }
+    form.new-alias { display: flex; gap: 0.5rem; margin-bottom: 1.25rem; }
+    form.new-alias input[type=text] { flex: 1; padding: 0.45rem 0.7rem; border: 1px solid #ccc; border-radius: 4px; font-size: 0.9rem; }
+    form.new-alias input[type=text]:focus { outline: 2px solid #2979ff; border-color: transparent; }
+    form.new-alias button[type=submit] { padding: 0.45rem 1rem; background: #2979ff; color: #fff; border: none; border-radius: 4px; font-size: 0.9rem; cursor: pointer; }
+    form.new-alias button[type=submit]:hover { background: #1565c0; }
+    .htmx-indicator { opacity: 0; transition: opacity 0.15s; }
+    .htmx-request .htmx-indicator { opacity: 1; }
+  </style>
+</head>
+<body>
+{% block content %}{% endblock %}
+</body>
+</html>

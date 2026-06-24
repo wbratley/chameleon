@@ -1,0 +1,17 @@
+<tr id="alias-{{ alias.id }}" class="{{ 'burned' if alias.burned else '' }}">
+  <td>{{ alias.service }}</td>
+  <td><code>{{ alias.address }}</code></td>
+  <td>{{ alias.created_at[:10] }}</td>
+  <td>{{ alias.email_count }}</td>
+  <td>{{ alias.last_received_at[:10] if alias.last_received_at else "—" }}</td>
+  <td class="no-strike">
+    <button class="burn"
+            {% if alias.burned %}disabled{% endif %}
+            hx-post="/aliases/{{ alias.id }}/burn"
+            hx-target="#alias-{{ alias.id }}"
+            hx-swap="outerHTML"
+            hx-confirm="Burn {{ alias.address }}? All future mail will be dropped.">
+      {{ "Burned" if alias.burned else "Burn" }}
+    </button>
+  </td>
+</tr>

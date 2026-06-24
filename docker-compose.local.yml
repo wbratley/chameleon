@@ -4,10 +4,12 @@ services:
       context: services/local
     image: chameleon-local:latest
     restart: unless-stopped
-    # No inbound ports — client connects outbound to relay WebSocket API
+    ports:
+      - "127.0.0.1:8080:8080"
     env_file: services/local/.env
     volumes:
       - maildir:/srv/mail/chameleon
+      - aliasdata:/srv/data
     user: "5000:5000"
 
   dovecot:
@@ -26,3 +28,4 @@ services:
 
 volumes:
   maildir:
+  aliasdata:
