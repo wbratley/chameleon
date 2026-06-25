@@ -1,6 +1,9 @@
 import asyncio
+import base64
 import logging
 import signal
+import sys
+from pathlib import Path
 
 from aiohttp import web
 
@@ -8,6 +11,19 @@ from .aliases import AliasDB
 from .client import run_client
 from .config import LocalSettings
 from .web import make_web_app
+
+
+def _keygen() -> None:
+    from nacl.public import PrivateKey
+    key = PrivateKey.generate()
+    priv_b64 = base64.b64encode(bytes(key)).decode()
+    pub_b64 = base64.b64encode(bytes(key.public_key)).decode()
+    key_path = Path("secrets/private_key")
+    key_path.parent.mkdir(exist_ok=True)
+    key_path.write_text(priv_b64)
+    key_path.chmod(0o600)
+    print(f"Private key written to: {key_path}  (keep this off the relay)")
+    print(f"CHAMELEON_PUBLIC_KEY={pub_b64}  <- put this in services/relay/.env")
 
 
 async def _main() -> None:
@@ -45,6 +61,9 @@ async def _main() -> None:
 
 
 def main() -> None:
+    if len(sys.argv) > 1 and sys.argv[1] == "keygen":
+        _keygen()
+        return
     asyncio.run(_main())
 
 

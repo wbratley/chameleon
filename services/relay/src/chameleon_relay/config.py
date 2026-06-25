@@ -16,6 +16,7 @@ class RelaySettings(BaseSettings):
     API_HOST: str = "127.0.0.1"
     API_PORT: int = 8080
     API_TOKEN: str
+    PUBLIC_KEY: str
     QUEUE_DB_PATH: str = "/data/queue.db"
     LOG_LEVEL: str = "INFO"
     TLS_CERT_PATH: str | None = None

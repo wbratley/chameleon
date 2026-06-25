@@ -11,6 +11,7 @@ class LocalSettings(BaseSettings):
     RELAY_WS_URL: str
     RELAY_TOKEN: str
     MY_DOMAIN: str
+    PRIVATE_KEY_PATH: str = "/run/secrets/chameleon_private_key"
     MAILDIR_PATH: str = "/srv/mail/chameleon"
     ALIAS_DB_PATH: str = "/srv/data/aliases.db"
     WEB_HOST: str = "0.0.0.0"

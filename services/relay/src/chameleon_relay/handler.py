@@ -1,7 +1,9 @@
 import asyncio
+import base64
 import email.utils
 import logging
 
+from nacl.public import PublicKey, SealedBox
 from aiosmtpd.smtp import Envelope, Session, SMTP
 
 from .api import Broadcaster
@@ -23,6 +25,7 @@ class RelayHandler:
         self._queue = queue
         self._broadcaster = broadcaster
         self._main_loop = main_loop
+        self._box = SealedBox(PublicKey(base64.b64decode(settings.PUBLIC_KEY)))
 
     async def handle_RCPT(
         self,
@@ -70,7 +73,8 @@ class RelayHandler:
             logger.error("enqueue_failed error=%s", type(exc).__name__)
             return "421 4.4.1 Queue error, try again later"
 
-    async def _enqueue_and_broadcast(self, message_bytes: bytes) -> int:
-        msg_id = await self._queue.enqueue(message_bytes)
-        await self._broadcaster.broadcast(msg_id, message_bytes)
+    async def _enqueue_and_broadcast(self, plain_bytes: bytes) -> int:
+        ciphertext = self._box.encrypt(plain_bytes)
+        msg_id = await self._queue.enqueue(ciphertext)
+        await self._broadcaster.broadcast(msg_id, ciphertext)
         return msg_id

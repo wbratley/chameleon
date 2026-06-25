@@ -1,7 +1,12 @@
+import base64
+
 import pytest
+from nacl.public import PrivateKey
 from pydantic import ValidationError
 
 from chameleon_relay.config import RelaySettings
+
+_DUMMY_PUBLIC_KEY = base64.b64encode(bytes(PrivateKey.generate().public_key)).decode()
 
 
 def test_defaults_applied():
@@ -9,6 +14,7 @@ def test_defaults_applied():
         MY_DOMAIN="example.com",
         RELAY_HOSTNAME="relay.example.com",
         API_TOKEN="secret",
+        PUBLIC_KEY=_DUMMY_PUBLIC_KEY,
     )
     assert s.LISTEN_HOST == "0.0.0.0"
     assert s.LISTEN_PORT == 1025

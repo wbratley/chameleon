@@ -10,6 +10,8 @@ services:
     volumes:
       - maildir:/srv/mail/chameleon
       - aliasdata:/srv/data
+    secrets:
+      - chameleon_private_key
     user: "5000:5000"
 
   dovecot:
@@ -29,3 +31,7 @@ services:
 volumes:
   maildir:
   aliasdata:
+
+secrets:
+  chameleon_private_key:
+    file: ./secrets/private_key

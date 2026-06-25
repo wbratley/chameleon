@@ -4,9 +4,12 @@ import email as email_lib
 import json
 import logging
 from email.utils import parseaddr
+from pathlib import Path
 
 import aiohttp
 from aiohttp import WSMsgType
+from nacl.exceptions import CryptoError
+from nacl.public import PrivateKey, SealedBox
 
 from .aliases import AliasDB
 from .config import LocalSettings
@@ -28,11 +31,18 @@ async def _handle_deliver(
     ws: aiohttp.ClientWebSocketResponse,
     settings: LocalSettings,
     alias_db: AliasDB,
+    box: SealedBox,
     data: dict,
 ) -> None:
     msg_id = data["id"]
     try:
-        raw = base64.b64decode(data["message"])
+        ciphertext = base64.b64decode(data["message"])
+        try:
+            raw = box.decrypt(ciphertext)
+        except CryptoError:
+            logger.error("decrypt_failed id=%d — discarding", msg_id)
+            await ws.send_json({"type": "ack", "id": msg_id})
+            return
 
         to_addr = _extract_to(raw)
         if to_addr is not None:
@@ -51,6 +61,9 @@ async def _handle_deliver(
 
 
 async def run_client(settings: LocalSettings, alias_db: AliasDB) -> None:
+    priv_bytes = base64.b64decode(Path(settings.PRIVATE_KEY_PATH).read_text().strip())
+    box = SealedBox(PrivateKey(priv_bytes))
+
     backoff = 1.0
     max_backoff = 60.0
 
@@ -70,7 +83,7 @@ async def run_client(settings: LocalSettings, alias_db: AliasDB) -> None:
                             try:
                                 data = json.loads(msg.data)
                                 if data.get("type") == "deliver":
-                                    await _handle_deliver(ws, settings, alias_db, data)
+                                    await _handle_deliver(ws, settings, alias_db, box, data)
                             except (json.JSONDecodeError, KeyError, TypeError):
                                 logger.warning("malformed_frame")
                         elif msg.type in (WSMsgType.ERROR, WSMsgType.CLOSE):

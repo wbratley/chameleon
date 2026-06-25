@@ -10,6 +10,7 @@ dependencies = [
     "aiosmtpd>=1.4.6",
     "aiohttp>=3.9",
     "aiosqlite>=0.20",
+    "pynacl>=1.5",
     "pydantic-settings>=2.3",
 ]
 

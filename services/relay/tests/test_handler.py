@@ -2,6 +2,7 @@ from concurrent.futures import Future as ConcurrentFuture
 from unittest.mock import patch
 
 import pytest
+from nacl.public import SealedBox
 
 from chameleon_relay.handler import RelayHandler
 
@@ -27,11 +28,16 @@ async def test_rcpt_domain_check_is_case_insensitive(handler, envelope, session)
     assert result == "250 OK"
 
 
-async def test_enqueue_and_broadcast_calls_queue_then_broadcaster(
-    handler, mock_queue, broadcaster
+async def test_enqueue_and_broadcast_encrypts_before_queuing(
+    handler, mock_queue, broadcaster, test_private_key
 ):
-    msg_id = await handler._enqueue_and_broadcast(b"raw message")
-    mock_queue.enqueue.assert_awaited_once_with(b"raw message")
+    plain = b"raw message"
+    msg_id = await handler._enqueue_and_broadcast(plain)
+    ciphertext = mock_queue.enqueue.call_args[0][0]
+    # Stored bytes must not be plaintext
+    assert ciphertext != plain
+    # Must be decryptable with the corresponding private key
+    assert SealedBox(test_private_key).decrypt(ciphertext) == plain
     broadcaster.broadcast.assert_awaited_once()
     assert msg_id == 42
 
@@ -70,8 +76,8 @@ async def test_data_received_header_omits_recipient(handler, envelope, session):
         captured_msgs.append(msg)
         return 1
 
-    # Patch the method BEFORE handle_DATA is called so the coroutine it creates
-    # is already bound to the spy, not the original method.
+    # Spy replaces _enqueue_and_broadcast entirely — no encryption occurs.
+    # We're testing the Received header construction, not the encryption layer.
     handler._enqueue_and_broadcast = spy
 
     f: ConcurrentFuture[int] = ConcurrentFuture()
@@ -81,7 +87,6 @@ async def test_data_received_header_omits_recipient(handler, envelope, session):
     ) as mock_rcts:
         await handler.handle_DATA(None, session, envelope)
 
-    # Await the coroutine that was handed to run_coroutine_threadsafe
     coro = mock_rcts.call_args[0][0]
     await coro
 

@@ -14,12 +14,13 @@ SAMPLE = b"From: sender@example.com\r\nTo: user@example.com\r\nSubject: Hi\r\n\r
 
 
 @pytest.fixture
-def settings():
+def settings(test_private_key):
     return RelaySettings(
         MY_DOMAIN="example.com",
         RELAY_HOSTNAME="relay.example.com",
         API_TOKEN="test-token",
         QUEUE_DB_PATH=":memory:",
+        PUBLIC_KEY=base64.b64encode(bytes(test_private_key.public_key)).decode(),
     )
 
 
