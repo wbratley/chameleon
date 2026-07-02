@@ -16,6 +16,18 @@ async def test_create_generates_valid_address(alias_db):
     assert alias.last_received_at is None
 
 
+async def test_create_lowercases_domain(alias_db):
+    # A mixed-case domain must be stored lowercased so that inbound recipient
+    # lookups (which lowercase the address) match.
+    alias = await alias_db.create("Netflix", "Example.COM")
+    assert alias.address.endswith("@example.com")
+    # And a delivery to the lowercased address must find (not auto-register) it.
+    before = len(await alias_db.all())
+    result = await alias_db.record_delivery(alias.address.lower())
+    assert result is True
+    assert len(await alias_db.all()) == before  # no junk alias created
+
+
 async def test_create_uses_service_slug(alias_db):
     alias = await alias_db.create("Amazon Web Services", DOMAIN)
     local = alias.address.split("@")[0]

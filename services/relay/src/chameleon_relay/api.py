@@ -29,7 +29,9 @@ class Broadcaster:
             "message": base64.b64encode(raw).decode("ascii"),
         })
         dead: set[web.WebSocketResponse] = set()
-        for ws in self._clients:
+        # Snapshot the set: send_str awaits, and another coroutine may add/remove a
+        # client during that await, which would raise "Set changed size during iteration".
+        for ws in list(self._clients):
             try:
                 await ws.send_str(frame)
             except Exception:

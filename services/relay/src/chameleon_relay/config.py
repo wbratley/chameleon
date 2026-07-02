@@ -18,6 +18,10 @@ class RelaySettings(BaseSettings):
     API_TOKEN: str
     PUBLIC_KEY: str
     QUEUE_DB_PATH: str = "/data/queue.db"
+    # How long an undelivered message survives in the queue before the sweeper
+    # secure-deletes it. Bounds the window during which mail is recoverable if
+    # the local server is offline. Default 24h.
+    QUEUE_RETAIN_MINUTES: int = 1440
     LOG_LEVEL: str = "INFO"
     TLS_CERT_PATH: str | None = None
     TLS_KEY_PATH: str | None = None

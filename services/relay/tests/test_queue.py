@@ -48,13 +48,30 @@ async def test_sweep_deletes_old_undelivered(queue):
         (msg_id,),
     )
     await queue._conn.commit()
-    deleted = await queue.sweep()
+    deleted = await queue.sweep(1440)
     assert deleted >= 1
     assert await queue.pending() == []
 
 
 async def test_sweep_keeps_recent_pending(queue):
     await queue.enqueue(SAMPLE)
-    deleted = await queue.sweep()
+    deleted = await queue.sweep(1440)
     assert deleted == 0
     assert len(await queue.pending()) == 1
+
+
+async def test_sweep_honors_retain_minutes(queue):
+    msg_id = await queue.enqueue(SAMPLE)
+    # Age the message ~10 minutes.
+    await queue._conn.execute(
+        "UPDATE messages "
+        "SET received_at = strftime('%Y-%m-%dT%H:%M:%fZ','now','-10 minutes') "
+        "WHERE id = ?",
+        (msg_id,),
+    )
+    await queue._conn.commit()
+    # A 30-minute retention keeps it; a 5-minute retention sweeps it.
+    assert await queue.sweep(30) == 0
+    assert len(await queue.pending()) == 1
+    assert await queue.sweep(5) == 1
+    assert await queue.pending() == []

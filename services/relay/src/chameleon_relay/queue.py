@@ -43,10 +43,11 @@ class MessageQueue:
         await self._conn.execute("DELETE FROM messages WHERE id = ?", (msg_id,))
         await self._conn.commit()
 
-    async def sweep(self) -> int:
+    async def sweep(self, retain_minutes: int) -> int:
         cur = await self._conn.execute(
             "DELETE FROM messages "
-            "WHERE received_at < strftime('%Y-%m-%dT%H:%M:%fZ','now','-24 hours')"
+            "WHERE received_at < strftime('%Y-%m-%dT%H:%M:%fZ','now',?)",
+            (f"-{retain_minutes} minutes",),
         )
         await self._conn.commit()
         return cur.rowcount
