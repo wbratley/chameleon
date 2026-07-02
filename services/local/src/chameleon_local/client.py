@@ -18,6 +18,27 @@ from .delivery import deliver
 logger = logging.getLogger(__name__)
 
 
+# Transport header the relay prepends (inside the encrypted payload) carrying the
+# true envelope recipient(s). It must be stripped before the message is delivered.
+_RCPT_HEADER = b"X-Chameleon-Rcpt:"
+
+
+def _split_rcpt_header(raw: bytes) -> tuple[list[str] | None, bytes]:
+    """Peel off the leading X-Chameleon-Rcpt header.
+
+    Returns (recipients, message). recipients is None when the header is absent
+    (e.g. a message queued by an older relay), in which case message == raw.
+    """
+    if not raw.startswith(_RCPT_HEADER):
+        return None, raw
+    line, sep, rest = raw.partition(b"\n")
+    if not sep:
+        return None, raw
+    value = line[len(_RCPT_HEADER):].decode("utf-8", "replace")
+    recipients = [a.strip().lower() for a in value.split(",") if a.strip()]
+    return (recipients or None), rest
+
+
 def _extract_to(raw: bytes) -> str | None:
     try:
         msg = email_lib.message_from_bytes(raw)
@@ -44,15 +65,31 @@ async def _handle_deliver(
             await ws.send_json({"type": "ack", "id": msg_id})
             return
 
-        to_addr = _extract_to(raw)
-        if to_addr is not None:
-            should_deliver = await alias_db.record_delivery(to_addr)
-            if not should_deliver:
-                logger.info("burned id=%d address=%s", msg_id, to_addr)
+        recipients, message = _split_rcpt_header(raw)
+        if recipients is not None:
+            # Authoritative: the relay validated these are at our domain. Deliver
+            # unless every recipient alias is burned.
+            delivered_any = False
+            for addr in recipients:
+                if await alias_db.record_delivery(addr):
+                    delivered_any = True
+            if not delivered_any:
+                logger.info("burned id=%d recipients=%s", msg_id, recipients)
                 await ws.send_json({"type": "ack", "id": msg_id})
                 return
+        else:
+            # Backward-compat for messages queued before the relay added the header.
+            # Only trust a To address at our own domain — never auto-register a
+            # foreign address as an alias.
+            to_addr = _extract_to(message)
+            own_domain = "@" + settings.MY_DOMAIN.lower()
+            if to_addr is not None and to_addr.endswith(own_domain):
+                if not await alias_db.record_delivery(to_addr):
+                    logger.info("burned id=%d address=%s", msg_id, to_addr)
+                    await ws.send_json({"type": "ack", "id": msg_id})
+                    return
 
-        key = await deliver(settings.MAILDIR_PATH, raw)
+        key = await deliver(settings.MAILDIR_PATH, message)
         logger.info("delivered id=%d key=%s", msg_id, key)
         await ws.send_json({"type": "ack", "id": msg_id})
     except Exception as exc:

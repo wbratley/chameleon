@@ -14,11 +14,13 @@ from .queue import MessageQueue
 logger = logging.getLogger(__name__)
 
 
-async def _sweep_loop(queue: MessageQueue, interval: int = 300) -> None:
+async def _sweep_loop(
+    queue: MessageQueue, retain_minutes: int, interval: int = 300
+) -> None:
     while True:
         await asyncio.sleep(interval)
         try:
-            count = await queue.sweep()
+            count = await queue.sweep(retain_minutes)
             if count:
                 logger.info("sweep deleted=%d", count)
         except Exception as exc:
@@ -67,7 +69,9 @@ async def main(settings: RelaySettings) -> None:
         settings.MY_DOMAIN,
     )
 
-    sweep_task = asyncio.create_task(_sweep_loop(queue))
+    sweep_task = asyncio.create_task(
+        _sweep_loop(queue, settings.QUEUE_RETAIN_MINUTES)
+    )
 
     stop: asyncio.Future[None] = loop.create_future()
     loop.add_signal_handler(signal.SIGTERM, stop.set_result, None)

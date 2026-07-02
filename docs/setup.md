@@ -1,8 +1,14 @@
-# Chameleon Phase 1 — Setup Guide
+# Chameleon — Setup Guide
 
 Mail flows inbound → relay (VPS) → SQLite queue → WebSocket API → local server → Maildir → Dovecot → IMAP client.
 
 The local server connects outbound to the relay. No tunnel, no inbound ports required on the home server.
+
+Mail is encrypted end-to-end: the relay seals each message to your public key
+(libsodium sealed box) before it ever touches the queue, and only the home
+server holds the private key that can open it. So before deploying, you generate
+a keypair — the **public** key goes in the relay config, the **private** key
+stays on the home server (see step 0).
 
 ## Prerequisites
 
@@ -11,6 +17,25 @@ The local server connects outbound to the relay. No tunnel, no inbound ports req
 - A home server or NAS running Docker Compose — this stores your mail
 - Docker and Docker Compose on both machines
 - nginx + certbot on the VPS (TLS termination for the WebSocket API)
+
+## 0. Generate the encryption keypair (home server)
+
+Run this **on the home server** — the private key must never touch the VPS:
+
+```bash
+python -m chameleon_local keygen
+```
+
+This writes the private key to `secrets/private_key` (mode 0600) and prints a
+`CHAMELEON_PUBLIC_KEY=...` line. Keep the terminal output handy:
+
+- The printed `CHAMELEON_PUBLIC_KEY` value goes in the **relay** `.env` (step 2c).
+- The `secrets/private_key` file is mounted into the **local** container as a
+  Docker secret (step 3) — leave it where `keygen` put it, relative to the
+  `docker-compose.local.yml` you'll run.
+
+The relay refuses to start without `CHAMELEON_PUBLIC_KEY` set, and the local
+container fails to start if `secrets/private_key` is missing.
 
 ## 1. DNS
 
@@ -51,11 +76,15 @@ iptables-save > /etc/iptables/rules.v4
 cp services/relay/.env.example services/relay/.env
 ```
 
-Edit `services/relay/.env` — set your domain, hostname, and generate a strong API token:
+Edit `services/relay/.env`:
 
-```bash
-openssl rand -hex 32  # use this as CHAMELEON_API_TOKEN
-```
+- Set `CHAMELEON_MY_DOMAIN` and `CHAMELEON_RELAY_HOSTNAME`.
+- Set `CHAMELEON_PUBLIC_KEY` to the value `keygen` printed in step 0.
+- Generate a strong API token:
+
+  ```bash
+  openssl rand -hex 32  # use this as CHAMELEON_API_TOKEN
+  ```
 
 Build and start:
 ```bash
@@ -143,6 +172,6 @@ The message should appear in your IMAP inbox within seconds. If the local server
 
 **IMAP login failing**: verify `DOVECOT_PASS` in the root `.env` matches what your client sends.
 
-**Mail queued but not delivered**: if the relay has messages in the queue (`docker exec -it <relay> sqlite3 /data/queue.db "SELECT id, received_at, delivered FROM messages"`), the local server isn't processing them. Check the token matches and the WebSocket connection is established.
+**Mail queued but not delivered**: if the relay has messages in the queue (`docker exec -it <relay> sqlite3 /data/queue.db "SELECT id, received_at FROM messages"`), the local server isn't processing them. Messages are removed from the queue only once the local server acks delivery, so a non-empty queue means it isn't consuming them. Check the token matches and the WebSocket connection is established.
 
 **Permission errors on Maildir**: both `chameleon-local` and `dovecot` run as uid 5000 (`vmail`). The Docker Compose `user: "5000:5000"` and Dovecot's `userdb static args = uid=5000 gid=5000` enforce this. If the volume was created with wrong permissions, run `docker compose -f docker-compose.local.yml down -v` and recreate.

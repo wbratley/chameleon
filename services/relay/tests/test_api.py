@@ -6,11 +6,31 @@ import aiohttp
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
 
-from chameleon_relay.api import make_app
+from chameleon_relay.api import Broadcaster, make_app
 from chameleon_relay.config import RelaySettings
 from chameleon_relay.queue import MessageQueue
 
 SAMPLE = b"From: sender@example.com\r\nTo: user@example.com\r\nSubject: Hi\r\n\r\nBody"
+
+
+async def test_broadcast_tolerates_client_added_mid_iteration():
+    """A client connecting during a broadcast must not blow up the iteration."""
+    broadcaster = Broadcaster()
+
+    class _FakeWS:
+        def __init__(self, on_send=None):
+            self.on_send = on_send
+
+        async def send_str(self, frame):
+            if self.on_send is not None:
+                self.on_send()
+
+    # The first client, when sent to, simulates a new connection arriving.
+    broadcaster.add(_FakeWS(on_send=lambda: broadcaster.add(_FakeWS())))
+    broadcaster.add(_FakeWS())
+
+    # Must not raise "Set changed size during iteration".
+    await broadcaster.broadcast(1, b"payload")
 
 
 @pytest.fixture
