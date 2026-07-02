@@ -66,10 +66,7 @@ async def test_data_returns_421_on_timeout(handler, envelope, session):
     assert result.startswith("421")
 
 
-async def test_data_received_header_omits_recipient(handler, envelope, session):
-    """Received header must not contain the recipient alias address."""
-    envelope.rcpt_tos = ["private@example.com"]
-    envelope.content = b"Subject: Test\r\n\r\nBody"
+async def _capture_payload(handler, envelope, session) -> bytes:
     captured_msgs: list[bytes] = []
 
     async def spy(msg: bytes) -> int:
@@ -77,7 +74,7 @@ async def test_data_received_header_omits_recipient(handler, envelope, session):
         return 1
 
     # Spy replaces _enqueue_and_broadcast entirely — no encryption occurs.
-    # We're testing the Received header construction, not the encryption layer.
+    # We're inspecting the plaintext payload construction, not the encryption layer.
     handler._enqueue_and_broadcast = spy
 
     f: ConcurrentFuture[int] = ConcurrentFuture()
@@ -87,11 +84,31 @@ async def test_data_received_header_omits_recipient(handler, envelope, session):
     ) as mock_rcts:
         await handler.handle_DATA(None, session, envelope)
 
-    coro = mock_rcts.call_args[0][0]
-    await coro
-
+    await mock_rcts.call_args[0][0]
     assert len(captured_msgs) == 1
-    msg = captured_msgs[0]
-    received_section = msg[: msg.index(envelope.content)]
+    return captured_msgs[0]
+
+
+async def test_data_received_header_omits_recipient(handler, envelope, session):
+    """The Received header must not contain the recipient (no leaky "for" clause)."""
+    envelope.rcpt_tos = ["private@example.com"]
+    envelope.content = b"Subject: Test\r\n\r\nBody"
+
+    msg = await _capture_payload(handler, envelope, session)
+
+    preamble = msg[: msg.index(envelope.content)]
+    # The Received portion (everything from "Received:" on) must not leak the alias.
+    received_section = preamble[preamble.index(b"Received:"):]
     assert b"private@example.com" not in received_section
-    assert received_section.startswith(b"Received:")
+
+
+async def test_data_embeds_recipient_for_local(handler, envelope, session):
+    """The envelope recipient(s) are carried in X-Chameleon-Rcpt for burn enforcement."""
+    envelope.rcpt_tos = ["private@example.com", "second@example.com"]
+    envelope.content = b"Subject: Test\r\n\r\nBody"
+
+    msg = await _capture_payload(handler, envelope, session)
+
+    # Header is first, inside the (to-be-)encrypted payload, ahead of Received.
+    assert msg.startswith(b"X-Chameleon-Rcpt: private@example.com, second@example.com\r\n")
+    assert msg.index(b"X-Chameleon-Rcpt:") < msg.index(b"Received:")

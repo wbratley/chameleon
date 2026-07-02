@@ -50,13 +50,22 @@ class RelayHandler:
         peer_ip = session.peer[0] if session.peer else "unknown"
         host_name = session.host_name or "unknown"
 
-        # "for" clause is intentionally omitted — it would expose the alias address
+        # The "for" clause is intentionally omitted from Received — it would leak the
+        # alias address into the message delivered to the user's inbox.
         received = (
             f"Received: from {host_name} ([{peer_ip}])\r\n"
             f"\tby {self._settings.RELAY_HOSTNAME} (chameleon-relay) with ESMTP;\r\n"
             f"\t{email.utils.formatdate(localtime=False)}\r\n"
         ).encode("ascii")
-        message_bytes = received + envelope.content
+
+        # Carry the true envelope recipient(s) to the local server so it can enforce
+        # burns reliably instead of guessing from the To header. This lives *inside*
+        # the sealed-box payload — the relay operator never sees it — and the local
+        # server strips it before writing to the Maildir, so it never reaches the inbox.
+        rcpt_header = (
+            "X-Chameleon-Rcpt: " + ", ".join(envelope.rcpt_tos) + "\r\n"
+        ).encode("utf-8")
+        message_bytes = rcpt_header + received + envelope.content
 
         future = asyncio.run_coroutine_threadsafe(
             self._enqueue_and_broadcast(message_bytes),
