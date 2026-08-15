@@ -1,4 +1,5 @@
 import base64
+import hmac
 import json
 import logging
 
@@ -45,7 +46,7 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
     broadcaster: Broadcaster = request.app["broadcaster"]
 
     auth = request.headers.get("Authorization", "")
-    if auth != f"Bearer {settings.API_TOKEN}":
+    if not hmac.compare_digest(auth, f"Bearer {settings.API_TOKEN}"):
         raise web.HTTPUnauthorized()
 
     ws = web.WebSocketResponse(heartbeat=30)
