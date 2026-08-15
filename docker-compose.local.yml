@@ -19,7 +19,6 @@ services:
     restart: unless-stopped
     ports:
       - "143:143"
-      - "993:993"
     volumes:
       - ./config/dovecot:/etc/dovecot:ro
       - maildir:/srv/mail/chameleon

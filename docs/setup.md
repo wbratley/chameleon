@@ -122,7 +122,7 @@ docker compose -f docker-compose.local.yml up -d
 
 This starts:
 - `chameleon-local` — connects outbound to the relay WebSocket API and delivers mail to Maildir
-- `dovecot` on ports 143 (IMAP) and 993 (IMAPS) — exposes your Maildir to mail clients
+- `dovecot` on port 143 (IMAP) — exposes your Maildir to mail clients
 
 Check that the local service connected:
 ```bash
