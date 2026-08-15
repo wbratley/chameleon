@@ -1,6 +1,8 @@
 from concurrent.futures import Future as ConcurrentFuture
 from unittest.mock import patch
 
+import asyncio
+
 import pytest
 from nacl.public import SealedBox
 
@@ -38,8 +40,51 @@ async def test_enqueue_and_broadcast_encrypts_before_queuing(
     assert ciphertext != plain
     # Must be decryptable with the corresponding private key
     assert SealedBox(test_private_key).decrypt(ciphertext) == plain
+    # Broadcast is fire-and-forget: drain the background task before asserting.
+    await asyncio.gather(*handler._broadcast_tasks)
     broadcaster.broadcast.assert_awaited_once()
     assert msg_id == 42
+
+
+async def test_enqueue_returns_without_waiting_for_broadcast(
+    handler, mock_queue, broadcaster
+):
+    """Regression (issue #4): a stalled WebSocket client must not delay or
+    temp-fail the SMTP response. The message is durably enqueued and the
+    broadcast runs in the background."""
+    release = asyncio.Event()
+
+    async def stalled_broadcast(msg_id: int, raw: bytes) -> None:
+        await release.wait()  # simulates send_str hanging on a stalled client
+
+    broadcaster.broadcast.side_effect = stalled_broadcast
+
+    msg_id = await handler._enqueue_and_broadcast(b"payload")
+
+    # Returned promptly even though the broadcast can never complete.
+    assert msg_id == 42
+    mock_queue.enqueue.assert_awaited_once()
+
+    # The broadcast was genuinely scheduled, not skipped.
+    await asyncio.sleep(0)
+    broadcaster.broadcast.assert_awaited_once()
+    assert handler._broadcast_tasks
+
+    release.set()
+    await asyncio.gather(*handler._broadcast_tasks)
+
+
+async def test_broadcast_failure_is_logged_not_lost(handler, mock_queue, broadcaster, caplog):
+    """A background broadcast exception must be logged, not silently
+    swallowed by the fire-and-forget task."""
+    broadcaster.broadcast.side_effect = RuntimeError("boom")
+
+    msg_id = await handler._enqueue_and_broadcast(b"payload")
+    assert msg_id == 42
+
+    await asyncio.gather(*handler._broadcast_tasks, return_exceptions=True)
+    await asyncio.sleep(0)  # let the done-callback run
+    assert any("broadcast_failed" in r.message for r in caplog.records)
 
 
 async def test_data_returns_250_on_success(handler, envelope, session):
