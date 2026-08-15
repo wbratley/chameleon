@@ -130,6 +130,21 @@ docker compose -f docker-compose.local.yml logs local
 # Should show: connected url=wss://relay.yourdomain.com/ws
 ```
 
+### Web UI security
+
+The alias UI (`http://127.0.0.1:8080`) is intended for use from the home
+server itself or over an SSH tunnel. It has **no login**; its only defense
+against other pages in your browser is a same-origin check: every mutating
+request (create/burn) must carry an `Origin` header matching the UI's host,
+so a malicious webpage cannot forge cross-site form posts. Non-browser
+clients are rejected too — script the UI with e.g.
+`curl -H "Origin: http://127.0.0.1:8080"`.
+
+Do not rebind `CHAMELEON_WEB_HOST=0.0.0.0` on an untrusted network: anyone
+who can reach the port can read and burn your aliases. If you need remote
+access, use an SSH tunnel (`ssh -L 8080:127.0.0.1:8080`) or put the UI behind
+an authenticating reverse proxy.
+
 ## 4. Connect a mail client
 
 Configure any IMAP client (Thunderbird, Apple Mail, mutt) with:
