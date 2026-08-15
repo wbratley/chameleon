@@ -26,6 +26,9 @@ class RelayHandler:
         self._broadcaster = broadcaster
         self._main_loop = main_loop
         self._box = SealedBox(PublicKey(base64.b64decode(settings.PUBLIC_KEY)))
+        # Fire-and-forget broadcast tasks: keep a reference so they can't be
+        # garbage-collected mid-flight (see _enqueue_and_broadcast).
+        self._broadcast_tasks: set[asyncio.Task[None]] = set()
 
     async def handle_RCPT(
         self,
@@ -85,5 +88,23 @@ class RelayHandler:
     async def _enqueue_and_broadcast(self, plain_bytes: bytes) -> int:
         ciphertext = self._box.encrypt(plain_bytes)
         msg_id = await self._queue.enqueue(ciphertext)
-        await self._broadcaster.broadcast(msg_id, ciphertext)
+        # The broadcast is only a latency optimization — ws_handler replays all
+        # pending messages whenever a client (re)connects — so it must never
+        # gate the SMTP 250. A connected-but-stalled client can make send_str
+        # hang; awaiting it here would temp-fail DATA with a 421 for a message
+        # that is already durably enqueued, and the sender's retry would then
+        # enqueue a duplicate (issue #4). Only the enqueue gates the response.
+        task = asyncio.create_task(self._broadcaster.broadcast(msg_id, ciphertext))
+        self._broadcast_tasks.add(task)
+        task.add_done_callback(self._finish_broadcast)
         return msg_id
+
+    def _finish_broadcast(self, task: asyncio.Task[None]) -> None:
+        """Drop finished broadcast tasks and log anything they raised, so a
+        background failure is not silently swallowed."""
+        self._broadcast_tasks.discard(task)
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            logger.error("broadcast_failed error=%s", type(exc).__name__)
