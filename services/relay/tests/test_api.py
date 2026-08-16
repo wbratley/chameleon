@@ -98,7 +98,7 @@ async def test_ws_ack_marks_delivered(client, queue):
     await asyncio.wait_for(ws.receive(), timeout=5.0)
     await ws.send_json({"type": "ack", "id": msg_id})
     await asyncio.sleep(0.1)
-    assert await queue.pending() == []
+    assert [row async for row in queue.pending()] == []
     await ws.close()
 
 
@@ -110,5 +110,5 @@ async def test_ws_malformed_ack_is_ignored(client, queue):
     await ws.send_str("not json at all")
     await asyncio.sleep(0.1)
     # Message is still pending (malformed frame was ignored)
-    assert len(await queue.pending()) == 1
+    assert len([row async for row in queue.pending()]) == 1
     await ws.close()
