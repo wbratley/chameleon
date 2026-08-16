@@ -1,5 +1,7 @@
+import base64
 import logging
 import pathlib
+import secrets
 
 from aiohttp import web
 from aiohttp.typedefs import Handler
@@ -27,25 +29,61 @@ def _origin_host(origin: str) -> str:
     return origin.split("://", 1)[-1].lower()
 
 
+def _check_basic_auth(header: str, password: str) -> bool:
+    """Validate an ``Authorization: Basic ...`` header (any username)."""
+    scheme, _, encoded = header.partition(" ")
+    if scheme.lower() != "basic" or not encoded:
+        return False
+    try:
+        decoded = base64.b64decode(encoded, validate=True).decode("utf-8")
+    except (ValueError, UnicodeDecodeError):
+        return False
+    _, _, supplied = decoded.partition(":")
+    return secrets.compare_digest(supplied.encode("utf-8"), password.encode("utf-8"))
+
+
 @web.middleware
-async def reject_cross_origin(
+async def auth_and_csrf(
     request: web.Request, handler: Handler
 ) -> web.StreamResponse:
-    """Block cross-site POSTs (CSRF) against the alias UI.
+    """HTTP Basic auth for LAN access + CSRF (Origin) check on mutations.
 
-    The UI binds to 127.0.0.1:8080, but that does not stop a malicious page
-    in the user's own browser: CORS blocks reading cross-origin responses,
-    yet a form-encoded POST is a "simple request" whose side effect still
-    happens — any visited webpage could burn every alias by iterating ids.
-    Browsers attach Origin to all unsafe-method requests, so comparing it
-    with Host stops that without any tokens or session state (issue #5).
+    Two threats, two mechanisms (issue #5):
+
+    - The UI is reachable from the LAN, so an optional shared password
+      (``CHAMELEON_WEB_PASSWORD``) gates every request. Browsers prompt via
+      the WWW-Authenticate challenge; a companion app can send the same
+      ``Authorization`` header. Constant-time comparison avoids leaking it.
+    - A malicious webpage can still trigger the user's browser to POST here
+      (a form post is a CORS "simple request" — the side effect happens even
+      though the response can't be read), *including* requests where the
+      browser reuses cached Basic credentials. Browsers always attach an
+      Origin header to such requests, so a mismatching (or absent, when not
+      credentialed) Origin is rejected. Non-browser clients send no Origin
+      and are accepted with valid credentials only.
     """
+    settings: LocalSettings = request.app["settings"]
+    password = settings.WEB_PASSWORD
+    authorized = bool(password) and _check_basic_auth(
+        request.headers.get("Authorization", ""), password
+    )
+    if password and not authorized:
+        raise web.HTTPUnauthorized(
+            headers={"WWW-Authenticate": 'Basic realm="chameleon"'}
+        )
+
     if request.method in _UNSAFE_METHODS:
         origin = request.headers.get("Origin")
         if origin is None:
-            logger.warning("csrf_rejected reason=missing_origin path=%s", request.path)
-            raise web.HTTPForbidden(reason="missing Origin header")
-        if _origin_host(origin) != request.host.lower():
+            # Browsers always attach Origin to unsafe-method requests, so a
+            # missing Origin means a non-browser client: allowed only with
+            # valid credentials (companion app / scripting), else rejected.
+            if not authorized:
+                logger.warning(
+                    "csrf_rejected reason=missing_origin path=%s", request.path
+                )
+                raise web.HTTPForbidden(reason="missing Origin header")
+        elif _origin_host(origin) != request.host.lower():
             logger.warning(
                 "csrf_rejected reason=cross_origin path=%s origin=%s",
                 request.path,
@@ -98,7 +136,7 @@ async def burn_alias(request: web.Request) -> web.Response:
 
 
 def make_web_app(settings: LocalSettings, alias_db: AliasDB) -> web.Application:
-    app = web.Application(middlewares=[reject_cross_origin])
+    app = web.Application(middlewares=[auth_and_csrf])
     app["settings"] = settings
     app["alias_db"] = alias_db
     app["jinja_env"] = _jinja_env()

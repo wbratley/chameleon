@@ -1,3 +1,5 @@
+import base64
+
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
 
@@ -11,6 +13,20 @@ async def client(settings, alias_db):
     app = make_web_app(settings, alias_db)
     async with TestClient(TestServer(app)) as c:
         yield c
+
+
+@pytest.fixture
+async def auth_client(settings, alias_db):
+    """Client against an app configured with a UI password (LAN mode)."""
+    settings = settings.model_copy(update={"WEB_PASSWORD": "sekret"})
+    app = make_web_app(settings, alias_db)
+    async with TestClient(TestServer(app)) as c:
+        yield c
+
+
+def auth_headers(password: str, user: str = "me") -> dict[str, str]:
+    token = base64.b64encode(f"{user}:{password}".encode()).decode()
+    return {"Authorization": f"Basic {token}"}
 
 
 def same_origin(client: TestClient) -> dict[str, str]:
@@ -115,3 +131,43 @@ async def test_get_is_not_blocked_without_origin(client):
     """Read-only requests need no Origin — plain browsing keeps working."""
     resp = await client.get("/")
     assert resp.status == 200
+
+
+# --- Basic auth (LAN mode) -------------------------------------------------
+
+
+async def test_password_enabled_requires_credentials(auth_client):
+    resp = await auth_client.get("/")
+    assert resp.status == 401
+    assert resp.headers["WWW-Authenticate"].startswith('Basic realm=')
+
+
+async def test_password_enabled_rejects_wrong_password(auth_client):
+    resp = await auth_client.get("/", headers=auth_headers("wrong"))
+    assert resp.status == 401
+
+
+async def test_password_enabled_accepts_any_username(auth_client):
+    resp = await auth_client.get("/", headers=auth_headers("sekret", user="anyone"))
+    assert resp.status == 200
+
+
+async def test_credentialed_post_without_origin_is_allowed(auth_client):
+    """Non-browser clients (companion app, curl) send Authorization but no
+    Origin; valid credentials exempt them from the browser-only Origin rule."""
+    resp = await auth_client.post(
+        "/aliases", data={"service": "Netflix"}, headers=auth_headers("sekret")
+    )
+    assert resp.status == 200
+    assert "netflix-" in await resp.text()
+
+
+async def test_credentialed_cross_origin_post_is_rejected(auth_client):
+    """A cross-site form post carries Origin even when the browser reuses
+    cached Basic credentials — credentials must not bypass the Origin check."""
+    resp = await auth_client.post(
+        "/aliases",
+        data={"service": "Netflix"},
+        headers={**auth_headers("sekret"), "Origin": "http://evil.example"},
+    )
+    assert resp.status == 403
