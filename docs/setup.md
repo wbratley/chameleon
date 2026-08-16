@@ -130,6 +130,28 @@ docker compose -f docker-compose.local.yml logs local
 # Should show: connected url=wss://relay.yourdomain.com/ws
 ```
 
+### Web UI security
+
+The alias UI is meant to be reached from other machines on your LAN
+(`http://<your-server>:8080`). Protect it with a shared password — add to
+`services/local/.env` and restart:
+
+```bash
+CHAMELEON_WEB_PASSWORD=pick-something-strong
+```
+
+Browsers will prompt for it (HTTP Basic auth — any username works), and a
+companion app can present the same `Authorization` header. If the password
+is unset, the UI starts **without** authentication (a startup warning is
+logged) — only acceptable on a trusted network.
+
+Regardless of the password, mutating requests (create/burn) must carry an
+`Origin` header matching the UI's host, so a malicious webpage cannot forge
+cross-site form posts — even ones that trigger your browser's cached Basic
+credentials. Non-browser clients send no `Origin` and pass with valid
+credentials, so scripting works, e.g.
+`curl -u me:$CHAMELEON_WEB_PASSWORD -d service=Netflix http://server:8080/aliases`.
+
 ## 4. Connect a mail client
 
 Configure any IMAP client (Thunderbird, Apple Mail, mutt) with:

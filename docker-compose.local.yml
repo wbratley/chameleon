@@ -5,7 +5,7 @@ services:
     image: chameleon-local:latest
     restart: unless-stopped
     ports:
-      - "127.0.0.1:8080:8080"
+      - "8080:8080"
     env_file: services/local/.env
     volumes:
       - maildir:/srv/mail/chameleon

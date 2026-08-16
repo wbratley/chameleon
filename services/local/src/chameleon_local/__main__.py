@@ -40,7 +40,15 @@ async def _main() -> None:
     runner = web.AppRunner(app)
     await runner.setup()
     await web.TCPSite(runner, settings.WEB_HOST, settings.WEB_PORT).start()
-    logging.getLogger(__name__).info("web ui on %s:%d", settings.WEB_HOST, settings.WEB_PORT)
+    log = logging.getLogger(__name__)
+    log.info("web ui on %s:%d", settings.WEB_HOST, settings.WEB_PORT)
+    if settings.WEB_PASSWORD:
+        log.info("web ui auth=password")
+    else:
+        log.warning(
+            "web ui auth=DISABLED: CHAMELEON_WEB_PASSWORD is not set; "
+            "anyone who can reach the UI can view and burn aliases"
+        )
 
     loop = asyncio.get_running_loop()
     stop: asyncio.Future[None] = loop.create_future()
