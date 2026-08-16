@@ -1,4 +1,5 @@
 import base64
+import hmac
 import json
 import logging
 
@@ -45,7 +46,11 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
     broadcaster: Broadcaster = request.app["broadcaster"]
 
     auth = request.headers.get("Authorization", "")
-    if auth != f"Bearer {settings.API_TOKEN}":
+    # Constant-time compare: plain == short-circuits on the first differing
+    # byte, leaking token length/prefix through response timing (issue #7).
+    if not hmac.compare_digest(
+        auth.encode(), f"Bearer {settings.API_TOKEN}".encode()
+    ):
         raise web.HTTPUnauthorized()
 
     ws = web.WebSocketResponse(heartbeat=30)
