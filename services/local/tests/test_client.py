@@ -11,10 +11,15 @@ from aiohttp.test_utils import TestClient, TestServer
 from nacl.public import PrivateKey, SealedBox
 
 from chameleon_local.aliases import AliasDB
-from chameleon_local.client import run_client
+from chameleon_local.client import _parse_rcpt_frame, run_client
 from chameleon_local.config import LocalSettings
 
 SAMPLE = b"From: sender@example.com\r\nTo: user@example.com\r\nSubject: Hi\r\n\r\nBody"
+RECEIVED = (
+    b"Received: from sender ([203.0.113.9])\r\n"
+    b"\tby relay.example.com (chameleon-relay) with ESMTP;\r\n"
+    b"\tFri,  1 Jan 2026 00:00:00 +0000\r\n"
+)
 
 
 def _encrypt(raw: bytes, private_key: PrivateKey) -> str:
@@ -48,7 +53,7 @@ async def test_client_delivers_message_and_acks(tmp_path, test_private_key, priv
         await ws.send_json({
             "type": "deliver",
             "id": 1,
-            "message": _encrypt(SAMPLE, test_private_key),
+            "message": _encrypt(_frame("user@example.com", SAMPLE), test_private_key),
         })
         async for msg in ws:
             if msg.type == WSMsgType.TEXT:
@@ -84,7 +89,7 @@ async def test_client_no_ack_on_delivery_failure(tmp_path, test_private_key, pri
         await ws.send_json({
             "type": "deliver",
             "id": 2,
-            "message": _encrypt(SAMPLE, test_private_key),
+            "message": _encrypt(_frame("user@example.com", SAMPLE), test_private_key),
         })
         await asyncio.wait_for(deliver_called.wait(), timeout=3.0)
         await asyncio.sleep(0.2)
@@ -130,7 +135,7 @@ async def test_client_reconnects_after_server_close(tmp_path, test_private_key, 
             await ws.send_json({
                 "type": "deliver",
                 "id": connect_count,
-                "message": _encrypt(SAMPLE, test_private_key),
+                "message": _encrypt(_frame("user@example.com", SAMPLE), test_private_key),
             })
             async for msg in ws:
                 if msg.type == WSMsgType.TEXT:
@@ -167,7 +172,7 @@ async def test_client_drops_burned_alias_and_acks(tmp_path, test_private_key, pr
         await ws.send_json({
             "type": "deliver",
             "id": 1,
-            "message": _encrypt(SAMPLE, test_private_key),
+            "message": _encrypt(_frame("user@example.com", SAMPLE), test_private_key),
         })
         async for msg in ws:
             if msg.type == WSMsgType.TEXT:
@@ -238,9 +243,15 @@ async def test_client_acks_and_discards_on_decrypt_failure(
     assert not new_dir.exists() or len(list(new_dir.iterdir())) == 0
 
 
+def _frame(rcpt: str, body: bytes) -> bytes:
+    """Prepend the length-prefixed recipient frame the relay writes (issue #6)."""
+    block = rcpt.encode()
+    return b"CHAMELEON-RCPT/1 " + str(len(block)).encode() + b"\r\n" + block + RECEIVED + body
+
+
 def _with_rcpt(rcpt: str, body: bytes) -> bytes:
-    """Prepend the transport header the relay adds inside the encrypted payload."""
-    return f"X-Chameleon-Rcpt: {rcpt}\r\n".encode() + body
+    """Prepend the legacy transport header (relays before the frame format)."""
+    return f"X-Chameleon-Rcpt: {rcpt}\r\n".encode() + RECEIVED + body
 
 
 async def _deliver_one(tmp_path, private_key_file, db, payload_b64, msg_id=1):
@@ -275,8 +286,8 @@ async def _deliver_one(tmp_path, private_key_file, db, payload_b64, msg_id=1):
 async def test_burn_enforced_via_envelope_recipient_when_to_header_differs(
     tmp_path, test_private_key, private_key_file
 ):
-    """The core fix: a burned alias is dropped based on X-Chameleon-Rcpt even when
-    the visible To header names a different address (BCC / list mail)."""
+    """The core fix: a burned alias is dropped based on the envelope recipients
+    even when the visible To header names a different address (BCC / list mail)."""
     db = await _make_alias_db(tmp_path)
     await db.record_delivery("secret-alias@example.com")
     await db.burn((await db.all())[0].id)
@@ -286,7 +297,7 @@ async def test_burn_enforced_via_envelope_recipient_when_to_header_differs(
         b"From: news@service.com\r\nTo: undisclosed-recipients:;\r\n"
         b"Subject: Deal!\r\n\r\nBuy now"
     )
-    payload = _encrypt(_with_rcpt("secret-alias@example.com", body), test_private_key)
+    payload = _encrypt(_frame("secret-alias@example.com", body), test_private_key)
     acks = await _deliver_one(tmp_path, private_key_file, db, payload)
     await db.close()
 
@@ -295,10 +306,29 @@ async def test_burn_enforced_via_envelope_recipient_when_to_header_differs(
     assert not new_dir.exists() or len(list(new_dir.iterdir())) == 0  # but not delivered
 
 
-async def test_rcpt_header_stripped_before_delivery(
+async def test_rcpt_frame_stripped_before_delivery(
     tmp_path, test_private_key, private_key_file
 ):
-    """The X-Chameleon-Rcpt transport header must not reach the user's Maildir."""
+    """Neither the frame nor its recipients block may reach the user's Maildir."""
+    db = await _make_alias_db(tmp_path)
+    payload = _encrypt(_frame("user@example.com", SAMPLE), test_private_key)
+    acks = await _deliver_one(tmp_path, private_key_file, db, payload)
+    await db.close()
+
+    assert acks == [{"type": "ack", "id": 1}]
+    files = list((tmp_path / "new").iterdir())
+    assert len(files) == 1
+    content = files[0].read_bytes()
+    assert b"CHAMELEON-RCPT/1" not in content
+    assert content.startswith(b"Received:")  # relay's header starts the message
+    assert b"Subject: Hi" in content  # the real message survived intact
+
+
+async def test_legacy_rcpt_header_still_delivers(
+    tmp_path, test_private_key, private_key_file
+):
+    """Staggered upgrades: messages queued by a pre-frame relay (legacy
+    X-Chameleon-Rcpt header) still deliver, stripped and burn-checked."""
     db = await _make_alias_db(tmp_path)
     payload = _encrypt(_with_rcpt("user@example.com", SAMPLE), test_private_key)
     acks = await _deliver_one(tmp_path, private_key_file, db, payload)
@@ -309,20 +339,78 @@ async def test_rcpt_header_stripped_before_delivery(
     assert len(files) == 1
     content = files[0].read_bytes()
     assert b"X-Chameleon-Rcpt" not in content
-    assert b"Subject: Hi" in content  # the real message survived intact
+    assert b"Subject: Hi" in content
 
 
-async def test_foreign_to_address_not_auto_registered_in_fallback(
+async def test_unframed_payload_is_discarded_and_acked(
     tmp_path, test_private_key, private_key_file
 ):
-    """Fallback path (no rcpt header): a foreign To address must not become an alias."""
+    """No frame and no legacy header: the To-header guess is gone (issue #6) —
+    a payload we can't attribute can't be burn-checked, so it is discarded
+    (acked, so it isn't redelivered forever) and nothing is auto-registered."""
     db = await _make_alias_db(tmp_path)
-    body = b"From: a@b.com\r\nTo: news@foreign.com\r\nSubject: Hi\r\n\r\nBody"
-    payload = _encrypt(body, test_private_key)  # no X-Chameleon-Rcpt
+    payload = _encrypt(SAMPLE, test_private_key)  # no frame, no legacy header
     acks = await _deliver_one(tmp_path, private_key_file, db, payload)
     aliases = await db.all()
     await db.close()
 
     assert acks == [{"type": "ack", "id": 1}]
-    assert len(list((tmp_path / "new").iterdir())) == 1  # still delivered
-    assert aliases == []  # but no junk alias created for the foreign address
+    new_dir = tmp_path / "new"
+    assert not new_dir.exists() or len(list(new_dir.iterdir())) == 0
+    assert aliases == []
+
+
+async def test_forged_frame_without_received_is_discarded(
+    tmp_path, test_private_key, private_key_file
+):
+    """The frame's sanity check: whatever follows the recipient block must be
+    the relay's own Received: header. A frame whose block is followed by
+    attacker-style content is not trusted and not delivered (issue #6)."""
+    db = await _make_alias_db(tmp_path)
+    block = b"unburned-alias@example.com"
+    raw = (
+        b"CHAMELEON-RCPT/1 " + str(len(block)).encode() + b"\r\n" + block
+        + b"Subject: forged\r\n\r\nno Received header here"
+    )
+    payload = _encrypt(raw, test_private_key)
+    acks = await _deliver_one(tmp_path, private_key_file, db, payload)
+    aliases = await db.all()
+    await db.close()
+
+    assert acks == [{"type": "ack", "id": 1}]
+    new_dir = tmp_path / "new"
+    assert not new_dir.exists() or len(list(new_dir.iterdir())) == 0
+    assert aliases == []  # no delivery recorded for the forged recipient
+
+
+# --- frame parser unit tests (issue #6) ------------------------------------
+
+
+def test_parse_frame_roundtrip():
+    block = b"first@example.com, second@example.com"
+    raw = (
+        b"CHAMELEON-RCPT/1 " + str(len(block)).encode() + b"\r\n" + block + RECEIVED + b"body"
+    )
+    recipients, message = _parse_rcpt_frame(raw)
+    assert recipients == ["first@example.com", "second@example.com"]
+    assert message == RECEIVED + b"body"
+
+
+def test_parse_frame_rejects_non_numeric_length():
+    raw = b"CHAMELEON-RCPT/1 9x9\r\nabc" + RECEIVED
+    assert _parse_rcpt_frame(raw)[0] is None
+
+
+def test_parse_frame_rejects_truncated_block():
+    raw = b"CHAMELEON-RCPT/1 500\r\nshort" + RECEIVED
+    assert _parse_rcpt_frame(raw)[0] is None
+
+
+def test_parse_frame_rejects_missing_received():
+    raw = b"CHAMELEON-RCPT/1 5\r\nuser@example.com" + b"X-Not-Received: 1\r\nbody"
+    assert _parse_rcpt_frame(raw)[0] is None
+
+
+def test_parse_frame_rejects_empty_block():
+    raw = b"CHAMELEON-RCPT/1 0\r\n" + RECEIVED
+    assert _parse_rcpt_frame(raw)[0] is None

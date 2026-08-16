@@ -65,10 +65,18 @@ class RelayHandler:
         # burns reliably instead of guessing from the To header. This lives *inside*
         # the sealed-box payload — the relay operator never sees it — and the local
         # server strips it before writing to the Maildir, so it never reaches the inbox.
-        rcpt_header = (
-            "X-Chameleon-Rcpt: " + ", ".join(envelope.rcpt_tos) + "\r\n"
-        ).encode("utf-8")
-        message_bytes = rcpt_header + received + envelope.content
+        # The block is length-prefixed rather than a positional header convention:
+        # the client reads exactly len(rcpt_block) bytes and then requires its own
+        # Received: header, so sender-controlled DATA bytes can never be parsed as
+        # recipient info, whatever a future refactor does to the prepends (issue #6).
+        rcpt_block = ", ".join(envelope.rcpt_tos).encode("utf-8")
+        rcpt_frame = (
+            b"CHAMELEON-RCPT/1 "
+            + str(len(rcpt_block)).encode("ascii")
+            + b"\r\n"
+            + rcpt_block
+        )
+        message_bytes = rcpt_frame + received + envelope.content
 
         future = asyncio.run_coroutine_threadsafe(
             self._enqueue_and_broadcast(message_bytes),

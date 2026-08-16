@@ -148,12 +148,18 @@ async def test_data_received_header_omits_recipient(handler, envelope, session):
 
 
 async def test_data_embeds_recipient_for_local(handler, envelope, session):
-    """The envelope recipient(s) are carried in X-Chameleon-Rcpt for burn enforcement."""
+    """The envelope recipient(s) are carried in a length-prefixed frame for
+    burn enforcement (issue #6)."""
     envelope.rcpt_tos = ["private@example.com", "second@example.com"]
     envelope.content = b"Subject: Test\r\n\r\nBody"
 
     msg = await _capture_payload(handler, envelope, session)
 
-    # Header is first, inside the (to-be-)encrypted payload, ahead of Received.
-    assert msg.startswith(b"X-Chameleon-Rcpt: private@example.com, second@example.com\r\n")
-    assert msg.index(b"X-Chameleon-Rcpt:") < msg.index(b"Received:")
+    # Frame is first, inside the (to-be-)encrypted payload, ahead of Received,
+    # and its length prefix makes the boundary exact — no header convention
+    # that message content could collide with.
+    block = b"private@example.com, second@example.com"
+    prefix = b"CHAMELEON-RCPT/1 " + str(len(block)).encode() + b"\r\n" + block
+    assert msg.startswith(prefix)
+    assert msg[len(prefix):].startswith(b"Received:")
+    assert msg.endswith(envelope.content)

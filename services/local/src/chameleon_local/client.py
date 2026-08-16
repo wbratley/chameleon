@@ -1,9 +1,7 @@
 import asyncio
 import base64
-import email as email_lib
 import json
 import logging
-from email.utils import parseaddr
 from pathlib import Path
 
 import aiohttp
@@ -18,34 +16,63 @@ from .delivery import deliver
 logger = logging.getLogger(__name__)
 
 
-# Transport header the relay prepends (inside the encrypted payload) carrying the
-# true envelope recipient(s). It must be stripped before the message is delivered.
+# Length-prefixed recipient frame the relay prepends (inside the encrypted
+# payload) carrying the true envelope recipient(s):
+#   "CHAMELEON-RCPT/1 <n>\r\n" + exactly n bytes of comma-separated recipients,
+# followed immediately by the relay's Received: header and the message.
+# Because the block length is explicit, message content can never be parsed
+# as frame bytes — unlike the legacy header convention below (issue #6).
+_FRAME_MAGIC = b"CHAMELEON-RCPT/1 "
+# Legacy positional header written by relays before the frame format; kept only
+# so messages queued across a staggered upgrade still deliver. Remove once no
+# pre-frame relay can feed this deployment.
 _RCPT_HEADER = b"X-Chameleon-Rcpt:"
 
 
-def _split_rcpt_header(raw: bytes) -> tuple[list[str] | None, bytes]:
-    """Peel off the leading X-Chameleon-Rcpt header.
+def _parse_rcpt_frame(raw: bytes) -> tuple[list[str] | None, bytes]:
+    """Parse the length-prefixed recipient frame.
 
-    Returns (recipients, message). recipients is None when the header is absent
-    (e.g. a message queued by an older relay), in which case message == raw.
+    Returns (recipients, message). recipients is None when the payload is not
+    a valid frame — including when any sanity check fails, so the caller falls
+    back to the legacy format / discards rather than trusting a suspect frame.
+    """
+    if not raw.startswith(_FRAME_MAGIC):
+        return None, raw
+    head, sep, rest = raw.partition(b"\r\n")
+    if not sep:
+        return None, raw
+    length = head[len(_FRAME_MAGIC):]
+    if not length.isdigit():
+        return None, raw
+    n = int(length)
+    if n <= 0 or len(rest) < n:
+        return None, raw  # truncated or empty recipient block
+    block, message = rest[:n], rest[n:]
+    # The relay always writes its own Received: header immediately after the
+    # frame. Anything else means this isn't a frame our relay constructed.
+    if not message.startswith(b"Received:"):
+        return None, raw
+    recipients = [a.strip().lower() for a in block.decode("utf-8", "replace").split(",") if a.strip()]
+    return (recipients or None), message
+
+
+def _split_rcpt_header(raw: bytes) -> tuple[list[str] | None, bytes]:
+    """Peel off the legacy leading X-Chameleon-Rcpt header.
+
+    Transitional (staggered upgrades): same construction as the frame — the
+    relay prepended this line ahead of its Received: header, which must follow
+    for the header to be trusted.
     """
     if not raw.startswith(_RCPT_HEADER):
         return None, raw
     line, sep, rest = raw.partition(b"\n")
     if not sep:
         return None, raw
+    if not rest.startswith(b"Received:"):
+        return None, raw
     value = line[len(_RCPT_HEADER):].decode("utf-8", "replace")
     recipients = [a.strip().lower() for a in value.split(",") if a.strip()]
     return (recipients or None), rest
-
-
-def _extract_to(raw: bytes) -> str | None:
-    try:
-        msg = email_lib.message_from_bytes(raw)
-        _, addr = parseaddr(msg.get("To", ""))
-        return addr.lower() or None
-    except Exception:
-        return None
 
 
 async def _handle_deliver(
@@ -65,29 +92,29 @@ async def _handle_deliver(
             await ws.send_json({"type": "ack", "id": msg_id})
             return
 
-        recipients, message = _split_rcpt_header(raw)
-        if recipients is not None:
-            # Authoritative: the relay validated these are at our domain. Deliver
-            # unless every recipient alias is burned.
-            delivered_any = False
-            for addr in recipients:
-                if await alias_db.record_delivery(addr):
-                    delivered_any = True
-            if not delivered_any:
-                logger.info("burned id=%d recipients=%s", msg_id, recipients)
-                await ws.send_json({"type": "ack", "id": msg_id})
-                return
-        else:
-            # Backward-compat for messages queued before the relay added the header.
-            # Only trust a To address at our own domain — never auto-register a
-            # foreign address as an alias.
-            to_addr = _extract_to(message)
-            own_domain = "@" + settings.MY_DOMAIN.lower()
-            if to_addr is not None and to_addr.endswith(own_domain):
-                if not await alias_db.record_delivery(to_addr):
-                    logger.info("burned id=%d address=%s", msg_id, to_addr)
-                    await ws.send_json({"type": "ack", "id": msg_id})
-                    return
+        recipients, message = _parse_rcpt_frame(raw)
+        if recipients is None:
+            # Legacy framing from a relay queued before the frame format existed.
+            recipients, message = _split_rcpt_header(raw)
+        if recipients is None:
+            # No trusted recipient info and no guessing from message content
+            # any more (issue #6): a payload we cannot attribute cannot be
+            # burn-checked, so discard it — like undecryptable mail, a retry
+            # can never fix the bytes.
+            logger.error("no_rcpt_frame id=%d — discarding", msg_id)
+            await ws.send_json({"type": "ack", "id": msg_id})
+            return
+
+        # Authoritative: the relay validated these are at our domain. Deliver
+        # unless every recipient alias is burned.
+        delivered_any = False
+        for addr in recipients:
+            if await alias_db.record_delivery(addr):
+                delivered_any = True
+        if not delivered_any:
+            logger.info("burned id=%d recipients=%s", msg_id, recipients)
+            await ws.send_json({"type": "ack", "id": msg_id})
+            return
 
         key = await deliver(settings.MAILDIR_PATH, message)
         logger.info("delivered id=%d key=%s", msg_id, key)

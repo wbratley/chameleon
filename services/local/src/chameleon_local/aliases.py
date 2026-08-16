@@ -72,7 +72,7 @@ class AliasDB:
     async def create(self, service: str, domain: str) -> Alias:
         slug = _make_slug(service)
         # Store the domain lowercased: inbound recipients are lowercased before
-        # lookup (see client._extract_to), so a mixed-case MY_DOMAIN would
+        # lookup (see client._parse_rcpt_frame), so a mixed-case MY_DOMAIN would
         # otherwise never match and every delivery would look like an unknown alias.
         domain = domain.lower()
         for _ in range(10):
