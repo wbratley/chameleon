@@ -58,7 +58,11 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
     broadcaster.add(ws)
 
     try:
-        for msg_id, raw in await queue.pending():
+        # Snapshot replay: yields only rows that existed at connect time;
+        # rows arriving during the drain come through the live broadcast.
+        # Acks are read only after the backlog drains (same as before) — the
+        # client's acks buffer in the socket until then.
+        async for msg_id, raw in queue.pending():
             await ws.send_json({
                 "type": "deliver",
                 "id": msg_id,
