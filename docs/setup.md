@@ -1,76 +1,97 @@
 # Chameleon — Setup Guide
 
-Mail flows inbound → relay (VPS) → SQLite queue → WebSocket API → local server → Maildir → Dovecot → IMAP client.
+Step-by-step deployment of the two halves of Chameleon plus a mail client:
 
-The local server connects outbound to the relay. No tunnel, no inbound ports required on the home server.
+- **Part A — the relay** on a public VPS: receives SMTP, encrypts to your public key, queues until picked up
+- **Part B — the local receiver** on your home server: pulls from the relay over WebSocket, decrypts, delivers to Maildir, serves the alias web UI and IMAP
+- **Part C — a client**: any IMAP mail app, plus creating and burning aliases
 
-Mail is encrypted end-to-end: the relay seals each message to your public key
-(libsodium sealed box) before it ever touches the queue, and only the home
-server holds the private key that can open it. So before deploying, you generate
-a keypair — the **public** key goes in the relay config, the **private** key
-stays on the home server (see step 0).
+```
+internet ──SMTP 25──▶ relay (VPS) ──sealed box──▶ SQLite queue
+                          │  wss:// (nginx + TLS)      │ secure-delete on ack
+                          ▼                            ▼
+                     local (home) ──▶ Maildir ──▶ dovecot ──IMAP 143──▶ your client
+                          │
+                          └── web UI :8080 — create / burn aliases
+```
+
+The local server connects **outbound only** — no tunnels and no open inbound
+ports on your home network. Mail is encrypted end-to-end: the relay seals each
+message to your public key (libsodium sealed box) before it ever touches the
+queue, and only the home server holds the private key that can open it.
 
 ## Prerequisites
 
-- A domain you control with the ability to set MX and A records
-- A VPS with a public IP — this runs the relay
-- A home server or NAS running Docker Compose — this stores your mail
+- A domain you control, with the ability to set MX and A records
+- A VPS with a public IP — runs the relay (Part A)
+- Any always-on machine at home (server/NAS) with Docker Compose — runs the local receiver (Part B)
 - Docker and Docker Compose on both machines
-- nginx + certbot on the VPS (TLS termination for the WebSocket API)
+- nginx + certbot on the VPS (TLS termination for the WebSocket)
 
-## 0. Generate the encryption keypair (home server)
+## Part 0 — Generate the encryption keypair (home server)
 
 Run this **on the home server** — the private key must never touch the VPS:
 
 ```bash
+git clone https://github.com/wbratley/chameleon.git && cd chameleon
+pip install services/local        # provides the `chameleon_local` package + keygen
 python -m chameleon_local keygen
 ```
 
-This writes the private key to `secrets/private_key` (mode 0600) and prints a
-`CHAMELEON_PUBLIC_KEY=...` line. Keep the terminal output handy:
+`keygen` writes the private key to `secrets/private_key` (mode 0600) and prints
+a `CHAMELEON_PUBLIC_KEY=...` line. Keep both where they are:
 
-- The printed `CHAMELEON_PUBLIC_KEY` value goes in the **relay** `.env` (step 2c).
-- The `secrets/private_key` file is mounted into the **local** container as a
-  Docker secret (step 3) — leave it where `keygen` put it, relative to the
-  `docker-compose.local.yml` you'll run.
+- The printed `CHAMELEON_PUBLIC_KEY` value goes in the **relay** `.env` (step A4).
+- The `secrets/private_key` file stays in the repo checkout on the home server —
+  the local compose file mounts it as a Docker secret (step B4).
 
 The relay refuses to start without `CHAMELEON_PUBLIC_KEY` set, and the local
 container fails to start if `secrets/private_key` is missing.
 
-## 1. DNS
+---
 
-Point your domain's MX record at the VPS:
+## Part A — Set up the relay (VPS)
+
+### A1. DNS and firewall
+
+Point your domain at the VPS. You need two A records — `mail` for inbound SMTP
+and `relay` for the WebSocket API (nginx/certbot):
 
 ```
-@     MX  10  mail.yourdomain.com.
-mail  A       <VPS_IP>
+@      MX  10  mail.yourdomain.com.
+mail   A       <VPS_IP>
+relay  A       <VPS_IP>
 ```
 
-Allow ports 25 (SMTP inbound) and 443 (HTTPS/WSS) on the VPS firewall.
+Open ports 25 (SMTP), 80 (certbot challenge + HTTP→HTTPS redirect) and 443
+(WSS) in the VPS firewall.
 
-## 2. Deploy the relay (VPS)
+### A2. nginx + TLS
 
-### 2a. Configure nginx + TLS
-
-Copy `config/nginx/chameleon.conf` to `/etc/nginx/conf.d/chameleon.conf`.  
-Replace `relay.yourdomain.com` with your actual hostname.
-
-Obtain a certificate:
 ```bash
+git clone https://github.com/wbratley/chameleon.git && cd chameleon
+cp config/nginx/chameleon.conf /etc/nginx/conf.d/chameleon.conf
+# replace every relay.yourdomain.com in that file with your hostname
+nano /etc/nginx/conf.d/chameleon.conf
 certbot --nginx -d relay.yourdomain.com
+systemctl reload nginx
 ```
 
-### 2b. Port 25 redirect
+The config proxies `/ws` (with WebSocket upgrade headers) and `/health` to
+`127.0.0.1:8080`, where the relay's API listens.
 
-The relay container listens on port 1025 to avoid needing root. Redirect port 25 to it:
+### A3. Redirect port 25 → 1025
+
+The relay container listens on 1025 to avoid running as root. Redirect port 25
+to it (the relay compose file uses host networking):
 
 ```bash
 iptables -t nat -A PREROUTING -p tcp --dport 25 -j REDIRECT --to-port 1025
-# Make persistent:
+# Make persistent (requires iptables-persistent):
 iptables-save > /etc/iptables/rules.v4
 ```
 
-### 2c. Configure and start
+### A4. Configure
 
 ```bash
 cp services/relay/.env.example services/relay/.env
@@ -78,99 +99,156 @@ cp services/relay/.env.example services/relay/.env
 
 Edit `services/relay/.env`:
 
-- Set `CHAMELEON_MY_DOMAIN` and `CHAMELEON_RELAY_HOSTNAME`.
-- Set `CHAMELEON_PUBLIC_KEY` to the value `keygen` printed in step 0.
-- Generate a strong API token:
+- `CHAMELEON_MY_DOMAIN=yourdomain.com` — the domain you set the MX record for
+- `CHAMELEON_RELAY_HOSTNAME=mail.yourdomain.com` — used in `Received:` headers
+- `CHAMELEON_PUBLIC_KEY` — the value `keygen` printed in Part 0 (**required**)
+- `CHAMELEON_API_TOKEN` — a strong shared secret, shared with the local server:
 
   ```bash
-  openssl rand -hex 32  # use this as CHAMELEON_API_TOKEN
+  openssl rand -hex 32
   ```
 
-Build and start:
+Optional:
+
+- `CHAMELEON_QUEUE_RETAIN_MINUTES` (default 1440 = 24 h) — how long mail
+  survives in the queue if the home server is offline before being
+  secure-deleted. Raise it to tolerate longer outages, lower it to shrink the
+  data-at-rest window.
+- `CHAMELEON_TLS_CERT_PATH` / `CHAMELEON_TLS_KEY_PATH` — STARTTLS for inbound
+  SMTP. Note: if you enable these you must also mount the cert/key files into
+  the container by adding a `volumes:` entry to `docker-compose.relay.yml`.
+
+### A5. Build and start
+
 ```bash
-docker compose -f docker-compose.relay.yml up -d
+docker compose -f docker-compose.relay.yml up -d --build
 ```
 
-Verify it's healthy:
+### A6. Verify
+
 ```bash
-docker compose -f docker-compose.relay.yml ps
-curl http://127.0.0.1:8080/health
+docker compose -f docker-compose.relay.yml ps       # should show (healthy)
+curl http://127.0.0.1:8080/health                   # {"status": "ok"}
+docker compose -f docker-compose.relay.yml logs relay
 ```
 
-## 3. Deploy the local server (home)
+From outside: `openssl s_client -connect mail.yourdomain.com:25` should show
+the SMTP banner.
 
-### 3a. Configure
+---
+
+## Part B — Set up the local receiver (home server)
+
+All commands run in the same checkout where you ran `keygen` in Part 0, with
+`secrets/private_key` still in place.
+
+### B1. Configure the local service
 
 ```bash
 cp services/local/.env.example services/local/.env
 ```
 
 Edit `services/local/.env`:
-- Set `CHAMELEON_RELAY_WS_URL=wss://relay.yourdomain.com/ws`
-- Set `CHAMELEON_RELAY_TOKEN` to the same value as `CHAMELEON_API_TOKEN` on the relay
 
-Set an IMAP password:
+- `CHAMELEON_RELAY_WS_URL=wss://relay.yourdomain.com/ws`
+- `CHAMELEON_RELAY_TOKEN` — the **same value** as `CHAMELEON_API_TOKEN` on the relay
+- `CHAMELEON_MY_DOMAIN=yourdomain.com`
+
+The defaults for `MAILDIR_PATH`, `ALIAS_DB_PATH`, `PRIVATE_KEY_PATH` and
+`WEB_PORT` match the compose file — leave them unless you know why not.
+
+### B2. Set the IMAP password
+
+Dovecot authenticates every login with one shared password. Create a root
+`.env` next to `docker-compose.local.yml`:
+
 ```bash
-echo "IMAP_PASSWORD=your_strong_password_here" > .env
+echo "IMAP_PASSWORD=pick-something-strong" > .env
 ```
 
-### 3b. Start
+### B3. Protect the alias web UI (recommended)
+
+The UI listens on all interfaces for LAN access. Add a shared password to
+`services/local/.env`:
 
 ```bash
-docker compose -f docker-compose.local.yml up -d
+CHAMELEON_WEB_PASSWORD=pick-something-else-strong
+```
+
+Browsers prompt for it (HTTP Basic auth — any username works), and a companion
+app can present the same `Authorization` header. If unset, the UI starts
+**without** authentication (a startup warning is logged) — only acceptable on
+a fully trusted network. Mutating requests (create/burn) additionally require
+an `Origin` header matching the UI's host, so a malicious webpage cannot forge
+cross-site form posts even with cached Basic credentials. Non-browser clients
+send no `Origin` and pass with valid credentials, so scripting works, e.g.
+`curl -u me:$CHAMELEON_WEB_PASSWORD -d service=Netflix http://server:8080/aliases`.
+
+### B4. Build and start
+
+```bash
+docker compose -f docker-compose.local.yml up -d --build
 ```
 
 This starts:
-- `chameleon-local` — connects outbound to the relay WebSocket API and delivers mail to Maildir
-- `dovecot` on port 143 (IMAP) — exposes your Maildir to mail clients
 
-Check that the local service connected:
+- `chameleon-local` — connects outbound to the relay and delivers to Maildir
+- `dovecot` — serves the Maildir over IMAP on port 143
+
+### B5. Verify
+
 ```bash
 docker compose -f docker-compose.local.yml logs local
-# Should show: connected url=wss://relay.yourdomain.com/ws
+# look for: connected url=wss://relay.yourdomain.com/ws
 ```
 
-### Web UI security
+Open `http://<home-server>:8080/` — you should see the alias UI (and the
+browser's password prompt if you set one).
 
-The alias UI is meant to be reached from other machines on your LAN
-(`http://<your-server>:8080`). Protect it with a shared password — add to
-`services/local/.env` and restart:
+---
+
+## Part C — Set up a client
+
+### C1. Add the IMAP account
+
+In any mail client (Thunderbird, Apple Mail, mutt, …):
+
+| Setting     | Value                           |
+|-------------|---------------------------------|
+| Protocol    | IMAP                            |
+| Server      | your home server's IP/hostname  |
+| Port        | 143                             |
+| Security    | None (plaintext — trusted LAN)  |
+| Username    | any string (e.g. `me`)          |
+| Password    | the `IMAP_PASSWORD` from B2     |
+
+There is no per-user mail store — username is arbitrary and everyone who has
+the password reads the same inbox. Traffic is plaintext, so only connect from
+a network you trust (or add a cert to Dovecot first; see `config/dovecot/conf.d/10-ssl.conf`).
+
+### C2. Create your first alias
+
+In the web UI (`http://<home-server>:8080/`), enter a service name like
+`netflix` and submit. You'll get an address like
+`netflix-k3jx@yourdomain.com` — copy it and use it as your email address when
+signing up for that service.
+
+Or from a script:
 
 ```bash
-CHAMELEON_WEB_PASSWORD=pick-something-strong
+curl -u me:$CHAMELEON_WEB_PASSWORD -d service=netflix http://<home-server>:8080/aliases
 ```
 
-Browsers will prompt for it (HTTP Basic auth — any username works), and a
-companion app can present the same `Authorization` header. If the password
-is unset, the UI starts **without** authentication (a startup warning is
-logged) — only acceptable on a trusted network.
+### C3. Send a test email
 
-Regardless of the password, mutating requests (create/burn) must carry an
-`Origin` header matching the UI's host, so a malicious webpage cannot forge
-cross-site form posts — even ones that trigger your browser's cached Basic
-credentials. Non-browser clients send no `Origin` and pass with valid
-credentials, so scripting works, e.g.
-`curl -u me:$CHAMELEON_WEB_PASSWORD -d service=Netflix http://server:8080/aliases`.
-
-## 4. Connect a mail client
-
-Configure any IMAP client (Thunderbird, Apple Mail, mutt) with:
-
-| Setting     | Value                          |
-|-------------|--------------------------------|
-| IMAP server | your home server IP or hostname |
-| Port        | 143                            |
-| Security    | None (local network) or STARTTLS if you add a cert to Dovecot |
-| Username    | any string (e.g. `me`)        |
-| Password    | value from `IMAP_PASSWORD`    |
-
-## 5. Send a test email
+From any machine with `swaks`:
 
 ```bash
 swaks --to test@yourdomain.com --server mail.yourdomain.com
 ```
 
-Or with telnet:
+Or raw SMTP:
+
 ```
 telnet mail.yourdomain.com 25
 EHLO test
@@ -184,16 +262,34 @@ Hello Chameleon.
 QUIT
 ```
 
-The message should appear in your IMAP inbox within seconds. If the local server was offline when mail arrived, it will be delivered the moment it reconnects.
+The message should appear in your IMAP inbox within seconds. If the home
+server was offline when it arrived, it is delivered the moment it reconnects.
+
+### C4. Burn an alias
+
+When an alias starts attracting spam, hit **Burn** next to it in the web UI.
+Mail to a burned alias is silently dropped at delivery time — enforced from
+the envelope recipients carried inside the encrypted payload, so it cannot be
+spoofed by message headers. Burn is permanent.
+
+---
 
 ## Troubleshooting
 
-**No mail arriving at relay**: check relay logs (`docker compose -f docker-compose.relay.yml logs relay`). Confirm port 25 reaches the container: `telnet localhost 1025` from the VPS.
+**No mail arriving at relay** — check `docker compose -f docker-compose.relay.yml logs relay`. Confirm port 25 reaches the container: `openssl s_client -connect mail.yourdomain.com:25` (or `telnet localhost 1025` from the VPS). Verify the MX record points at `mail.<domain>` and that your VPS provider doesn't block port 25.
 
-**Local server not connecting**: check `docker compose -f docker-compose.local.yml logs local`. Verify `CHAMELEON_RELAY_WS_URL` and `CHAMELEON_RELAY_TOKEN` match the relay config. Test the WebSocket endpoint: `curl -i -N -H "Connection: Upgrade" -H "Upgrade: websocket" -H "Authorization: Bearer <token>" https://relay.yourdomain.com/ws`.
+**Relay unhealthy** — `docker compose -f docker-compose.relay.yml logs relay`: it refuses to start without `CHAMELEON_PUBLIC_KEY`. Check `curl http://127.0.0.1:8080/health` and that nginx proxies `/ws` with the upgrade headers intact.
 
-**IMAP login failing**: verify `DOVECOT_PASS` in the root `.env` matches what your client sends.
+**Local server not connecting** — check `docker compose -f docker-compose.local.yml logs local`. Verify `CHAMELEON_RELAY_WS_URL` and `CHAMELEON_RELAY_TOKEN` match the relay. Test the WebSocket endpoint directly: `curl -i -N -H "Connection: Upgrade" -H "Upgrade: websocket" -H "Authorization: Bearer <token>" https://relay.yourdomain.com/ws`.
 
-**Mail queued but not delivered**: if the relay has messages in the queue (`docker exec -it <relay> sqlite3 /data/queue.db "SELECT id, received_at FROM messages"`), the local server isn't processing them. Messages are removed from the queue only once the local server acks delivery, so a non-empty queue means it isn't consuming them. Check the token matches and the WebSocket connection is established.
+**Mail queued but not delivered** — messages are removed from the queue only after the local server acks delivery, so a non-empty queue means it isn't consuming:
 
-**Permission errors on Maildir**: both `chameleon-local` and `dovecot` run as uid 5000 (`vmail`). The Docker Compose `user: "5000:5000"` and Dovecot's `userdb static args = uid=5000 gid=5000` enforce this. If the volume was created with wrong permissions, run `docker compose -f docker-compose.local.yml down -v` and recreate.
+```bash
+docker exec -it <relay-container> sqlite3 /data/queue.db "SELECT id, received_at FROM messages"
+```
+
+Check the token matches and the WebSocket connection is established (B5).
+
+**IMAP login failing** — the password your client sends must match `IMAP_PASSWORD` in the root `.env` (Dovecot reads it as `DOVECOT_PASS`). Username can be anything.
+
+**Permission errors on Maildir** — both `chameleon-local` and `dovecot` run as uid/gid 5000 (`vmail`), enforced by `user: "5000:5000"` in the compose file and Dovecot's static userdb. If the volume was created with wrong permissions, run `docker compose -f docker-compose.local.yml down -v` and recreate (⚠️ this deletes stored mail).
