@@ -13,6 +13,29 @@ from .queue import MessageQueue
 logger = logging.getLogger(__name__)
 
 
+def _ascii_hostname(host_name: str | None) -> str:
+    """Coerce an EHLO hostname to a plain-ASCII str.
+
+    RFC 5321 §4.1.1.1 restricts the EHLO argument to ASCII, but a client can
+    send anything. session.host_name is pasted verbatim into the Received
+    header, which must encode as ASCII — a UTF-8 hostname (e.g. IDN) would
+    otherwise raise UnicodeEncodeError inside handle_DATA and temp-fail the
+    message (issue #15).
+    """
+    if not host_name:
+        return "unknown"
+    try:
+        return host_name.encode("ascii").decode("ascii")
+    except UnicodeEncodeError:
+        pass
+    try:
+        return host_name.encode("idna").decode("ascii")
+    except (UnicodeError, ValueError):
+        # Not even IDNA-representable (e.g. empty label): drop the client's
+        # claim rather than lose the message over it.
+        return "unknown"
+
+
 class RelayHandler:
     def __init__(
         self,
@@ -51,7 +74,7 @@ class RelayHandler:
         envelope: Envelope,
     ) -> str:
         peer_ip = session.peer[0] if session.peer else "unknown"
-        host_name = session.host_name or "unknown"
+        host_name = _ascii_hostname(session.host_name)
 
         # The "for" clause is intentionally omitted from Received — it would leak the
         # alias address into the message delivered to the user's inbox.
