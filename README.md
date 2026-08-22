@@ -1,5 +1,7 @@
 # Chameleon
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 Self-hosted disposable email aliases. Give every service its own address —
 `netflix-k3jx@yourdomain.com`, `paypal-9m2a@yourdomain.com` — receive the mail
 in your normal IMAP client, and **burn** an alias the moment it starts
@@ -100,3 +102,7 @@ python -m venv .venv && source .venv/bin/activate
 pip install -e services/relay[dev] -e services/local[dev]
 pytest
 ```
+
+## License
+
+[MIT](LICENSE) © Wayne Bratley
