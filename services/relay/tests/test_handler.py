@@ -134,6 +134,46 @@ async def _capture_payload(handler, envelope, session) -> bytes:
     return captured_msgs[0]
 
 
+async def test_data_non_ascii_ehlo_hostname_still_accepted(handler, envelope, session):
+    """Regression (issue #15): a UTF-8 EHLO hostname must not crash the ASCII
+    encode of Received and temp-fail the message — nothing is wrong with it."""
+    session.host_name = "müller.example"
+    envelope.rcpt_tos = ["private@example.com"]
+    envelope.content = b"Subject: Test\r\n\r\nBody"
+
+    f: ConcurrentFuture[int] = ConcurrentFuture()
+    f.set_result(42)
+    with patch("chameleon_relay.handler.asyncio.run_coroutine_threadsafe", return_value=f):
+        result = await handler.handle_DATA(None, session, envelope)
+    assert result == "250 OK"
+
+
+async def test_data_received_header_is_ascii_for_idn_ehlo(handler, envelope, session):
+    """An internationalized EHLO hostname is punycoded into the Received
+    header, keeping it ASCII-only (issue #15)."""
+    session.host_name = "müller.example"
+    envelope.content = b"Subject: Test\r\n\r\nBody"
+
+    msg = await _capture_payload(handler, envelope, session)
+
+    received_section = msg[msg.index(b"Received:"):]
+    received_section.decode("ascii")  # must not raise
+    assert b"xn--mller-kva.example" in received_section
+
+
+async def test_data_received_header_falls_back_to_unknown_host(handler, envelope, session):
+    """A hostname that is neither ASCII nor IDNA-encodable (empty label) is
+    replaced with "unknown" instead of failing DATA (issue #15)."""
+    session.host_name = "müller..example"
+    envelope.content = b"Subject: Test\r\n\r\nBody"
+
+    msg = await _capture_payload(handler, envelope, session)
+
+    received_section = msg[msg.index(b"Received:"):]
+    received_section.decode("ascii")  # must not raise
+    assert b"from unknown" in received_section
+
+
 async def test_data_received_header_omits_recipient(handler, envelope, session):
     """The Received header must not contain the recipient (no leaky "for" clause)."""
     envelope.rcpt_tos = ["private@example.com"]
