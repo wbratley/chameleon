@@ -32,6 +32,12 @@ queue, and only the home server holds the private key that can open it.
   ⚠️ `docker.io` alone does **not** include Compose — the plugin is the separate
   `docker-compose-v2` package. Verify with `docker compose version` before
   continuing (commands in this guide use the `docker compose` v2 syntax).
+
+  If `docker ps` fails with "permission denied … /var/run/docker.sock", your user
+  isn't in the `docker` group:
+  ```bash
+  sudo usermod -aG docker $USER   # then log out/in (or run: newgrp docker)
+  ```
 - nginx + certbot on the VPS (TLS termination for the WebSocket)
 
 ## Part 0 — Generate the encryption keypair (home server)
