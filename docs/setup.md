@@ -45,6 +45,11 @@ a `CHAMELEON_PUBLIC_KEY=...` line. Keep both where they are:
 - The `secrets/private_key` file stays in the repo checkout on the home server —
   the local compose file mounts it as a Docker secret (step B4).
 
+Lost the printed value? It's re-derivable from the private key at any time —
+run `python -m chameleon_local publickey` in the same directory. Don't rerun
+`keygen` to "fix" it: a fresh pair would orphan any mail already sealed to the
+old public key.
+
 The relay refuses to start without `CHAMELEON_PUBLIC_KEY` set, and the local
 container fails to start if `secrets/private_key` is missing.
 
