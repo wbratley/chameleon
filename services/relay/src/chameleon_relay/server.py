@@ -34,7 +34,13 @@ def smtp_server_kwargs(settings: RelaySettings) -> dict:
     parameter of the installed aiosmtpd's SMTP.__init__ — a renamed kwarg
     otherwise only surfaces as a crash when the relay first starts.
     """
-    return {"data_size_limit": settings.MAX_MESSAGE_SIZE}
+    return {
+        # Banner/EHLO identity (220 greeting, 250-response). Without this,
+        # aiosmtpd falls back to socket.getfqdn() of the container, which
+        # advertises the VPS's internal hostname instead of the MX name.
+        "hostname": settings.RELAY_HOSTNAME,
+        "data_size_limit": settings.MAX_MESSAGE_SIZE,
+    }
 
 
 async def main(settings: RelaySettings) -> None:
