@@ -95,7 +95,7 @@ systemctl reload nginx
 ```
 
 The config proxies `/ws` (with WebSocket upgrade headers) and `/health` to
-`127.0.0.1:8080`, where the relay's API listens.
+`127.0.0.1:8080`, where the relay's API listens. If you change `CHAMELEON_API_PORT` (e.g. another service already claims 8080), update the `proxy_pass` port in the nginx config to match, and recreate the container (`docker compose up -d`, not `restart` — restart ignores env_file changes). The compose healthcheck follows the configured port automatically.
 
 ### A3. Redirect port 25 → 1025
 
