@@ -28,3 +28,13 @@ def test_server_kwargs_limit_message_size(settings):
     # key disappears, the relay silently stops limiting message size.
     kwargs = smtp_server_kwargs(settings)
     assert kwargs["data_size_limit"] == settings.MAX_MESSAGE_SIZE
+
+
+def test_server_kwargs_set_banner_hostname(settings):
+    # The 220 greeting / EHLO response must use the configured relay
+    # identity, not socket.getfqdn() of the container (VPS internal name).
+    from aiosmtpd.smtp import SMTP
+    from unittest.mock import MagicMock
+
+    smtp = SMTP(MagicMock(), **smtp_server_kwargs(settings))
+    assert smtp.hostname == settings.RELAY_HOSTNAME
