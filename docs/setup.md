@@ -25,7 +25,19 @@ queue, and only the home server holds the private key that can open it.
 - A domain you control, with the ability to set MX and A records
 - A VPS with a public IP — runs the relay (Part A)
 - Any always-on machine at home (server/NAS) with Docker Compose — runs the local receiver (Part B)
-- Docker and Docker Compose on both machines
+- Docker **and** the Compose v2 plugin on both machines. On Ubuntu 24.04:
+  ```bash
+  sudo apt install docker.io docker-compose-v2
+  ```
+  ⚠️ `docker.io` alone does **not** include Compose — the plugin is the separate
+  `docker-compose-v2` package. Verify with `docker compose version` before
+  continuing (commands in this guide use the `docker compose` v2 syntax).
+
+  If `docker ps` fails with "permission denied … /var/run/docker.sock", your user
+  isn't in the `docker` group:
+  ```bash
+  sudo usermod -aG docker $USER   # then log out/in (or run: newgrp docker)
+  ```
 - nginx + certbot on the VPS (TLS termination for the WebSocket)
 
 ## Part 0 — Generate the encryption keypair (home server)
