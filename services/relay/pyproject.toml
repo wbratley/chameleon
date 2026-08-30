@@ -7,7 +7,7 @@ name = "chameleon-relay"
 version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = [
-    "aiosmtpd>=1.4.6",
+    "aiosmtpd>=1.4.6,<2",
     "aiohttp>=3.9",
     "aiosqlite>=0.20",
     "pynacl>=1.5",

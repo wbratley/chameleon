@@ -27,6 +27,16 @@ async def _sweep_loop(
             logger.error("sweep_failed error=%s", type(exc).__name__)
 
 
+def smtp_server_kwargs(settings: RelaySettings) -> dict:
+    """kwargs for aiosmtpd.smtp.SMTP (via Controller's server_kwargs).
+
+    Kept in one place so the regression test can assert every key is a real
+    parameter of the installed aiosmtpd's SMTP.__init__ — a renamed kwarg
+    otherwise only surfaces as a crash when the relay first starts.
+    """
+    return {"data_size_limit": settings.MAX_MESSAGE_SIZE}
+
+
 async def main(settings: RelaySettings) -> None:
     logging.basicConfig(
         level=settings.LOG_LEVEL,
@@ -59,7 +69,7 @@ async def main(settings: RelaySettings) -> None:
         hostname=settings.LISTEN_HOST,
         port=settings.LISTEN_PORT,
         tls_context=tls_context,
-        server_kwargs={"max_content_size": settings.MAX_MESSAGE_SIZE},
+        server_kwargs=smtp_server_kwargs(settings),
     )
     controller.start()
     logger.info(
