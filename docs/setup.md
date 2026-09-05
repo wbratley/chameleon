@@ -80,8 +80,26 @@ mail   A       <VPS_IP>
 relay  A       <VPS_IP>
 ```
 
-Open ports 25 (SMTP), 80 (certbot challenge + HTTP→HTTPS redirect) and 443
-(WSS) in the VPS firewall.
+Enable the host firewall. The port list is 25 (SMTP), 80 (certbot challenge +
+HTTP→HTTPS redirect), 443 (WSS) — and 1025, for a non-obvious reason: the
+port-25 redirect added in A3 rewrites the packet to port 1025 *before* the
+firewall sees it, so a rule allowing 25 alone would silently drop all inbound
+mail. Exposing 1025 directly is harmless — it reaches the same SMTP service
+with no extra privilege; the redirect exists only so the unprivileged
+container can serve privileged port 25.
+
+```bash
+sudo ufw allow OpenSSH        # BEFORE enable — or you lock yourself out
+sudo ufw allow 25/tcp         # belt-and-suspenders if the redirect is ever removed
+sudo ufw allow 80/tcp
+sudo ufw allow 443/tcp
+sudo ufw allow 1025/tcp       # what the redirected mail actually arrives on
+sudo ufw enable
+```
+
+Audit the remaining surface with `sudo ss -tlnp`: expect SSH (22), nginx
+(80/443), and the relay (1025) only — the API binds 127.0.0.1 and should
+never appear on a public address. Anything else gets explained or removed.
 
 ### A2. nginx + TLS
 
@@ -104,8 +122,10 @@ to it (the relay compose file uses host networking):
 
 ```bash
 iptables -t nat -A PREROUTING -p tcp --dport 25 -j REDIRECT --to-port 1025
-# Make persistent (requires iptables-persistent):
-iptables-save > /etc/iptables/rules.v4
+# Make persistent (requires iptables-persistent) — save ONLY the nat table:
+# a full `iptables-save` would restore filter-table rules too and stomp ufw's
+# chains from A1 at boot.
+iptables-save -t nat > /etc/iptables/rules.v4
 ```
 
 ### A4. Configure
