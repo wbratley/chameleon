@@ -293,7 +293,7 @@ spoofed by message headers. Burn is permanent.
 
 ## Troubleshooting
 
-**No mail arriving at relay** — check `docker compose -f docker-compose.relay.yml logs relay`. Confirm port 25 reaches the container: `openssl s_client -connect mail.yourdomain.com:25` (or `telnet localhost 1025` from the VPS). Verify the MX record points at `mail.<domain>` and that your VPS provider doesn't block port 25.
+**No mail arriving at relay** — check `docker compose -f docker-compose.relay.yml logs relay`. Confirm port 25 reaches the container: `openssl s_client -connect mail.yourdomain.com:25` (or `telnet localhost 1025` from the VPS). Verify the MX record points at `mail.<domain>` and that your VPS provider doesn't block port 25. **Important:** many consumer ISPs block *outbound* port 25, so this test fails or hangs from your home network even when the relay is perfectly reachable — run it from a different network (e.g. a phone on cellular: `telnet mail.yourdomain.com 25`, expect the `220` banner) instead of assuming the server is broken. This applies to the `swaks` test in C2 as well.
 
 **Relay unhealthy** — `docker compose -f docker-compose.relay.yml logs relay`: it refuses to start without `CHAMELEON_PUBLIC_KEY`. Check `curl http://127.0.0.1:8080/health` and that nginx proxies `/ws` with the upgrade headers intact.
 
