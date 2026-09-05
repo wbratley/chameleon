@@ -155,6 +155,21 @@ iptables -t nat -A PREROUTING -p tcp --dport 25 -j REDIRECT --to-port 1025
 iptables-save -t nat > /etc/iptables/rules.v4
 ```
 
+If ufw is your firewall, an alternative that keeps one mechanism in charge of
+boot: append the redirect to `/etc/ufw/before.rules` instead (ufw reloads it on
+every start), and drop the standalone manual rule:
+
+```bash
+printf '\n*nat\n:PREROUTING ACCEPT [0:0]\n-A PREROUTING -p tcp --dport 25 -j REDIRECT --to-port 1025\nCOMMIT\n' >> /etc/ufw/before.rules
+ufw reload
+iptables -t nat -D PREROUTING -p tcp --dport 25 -j REDIRECT --to-port 1025
+```
+
+(One warning from the field: a ufw that was previously installed and then
+removed can leave stale `/etc/ufw/*` state behind — if `ufw allow` errors with
+"problem running" on a never-enabled firewall, `ufw enable` first to bootstrap
+the kernel chains, then add rules.)
+
 ### A4. Configure
 
 ```bash
