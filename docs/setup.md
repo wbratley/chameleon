@@ -101,6 +101,31 @@ Audit the remaining surface with `sudo ss -tlnp`: expect SSH (22), nginx
 (80/443), and the relay (1025) only — the API binds 127.0.0.1 and should
 never appear on a public address. Anything else gets explained or removed.
 
+**Keys-only SSH** — port 22 with password login is the one remaining exposure
+worth closing (internet bots brute-force it continuously). Order matters:
+prove key login works *before* disabling passwords, or you lock yourself out:
+
+```bash
+# on your workstation:
+ls ~/.ssh/id_*.pub || ssh-keygen -t ed25519
+ssh-copy-id <user>@<VPS_IP>
+ssh -o PasswordAuthentication=no <user>@<VPS_IP> true && echo key login works
+
+# on the VPS — sshd keeps the FIRST value it reads, and Ubuntu cloud images
+# ship /etc/ssh/sshd_config.d/50-cloud-init.conf with "PasswordAuthentication yes",
+# so this drop-in must sort BEFORE it (00-, not 99-):
+sudo tee /etc/ssh/sshd_config.d/00-hardening.conf <<'EOF'
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PermitRootLogin no
+EOF
+sudo sshd -t && sudo systemctl reload ssh
+sudo sshd -T | grep -i passwordauthentication   # must print: passwordauthentication no
+```
+
+Keep your existing SSH session open until a fresh terminal has logged in
+successfully.
+
 ### A2. nginx + TLS
 
 ```bash
