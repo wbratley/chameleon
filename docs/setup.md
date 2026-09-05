@@ -80,8 +80,53 @@ mail   A       <VPS_IP>
 relay  A       <VPS_IP>
 ```
 
-Open ports 25 (SMTP), 80 (certbot challenge + HTTP→HTTPS redirect) and 443
-(WSS) in the VPS firewall.
+Enable the host firewall. The port list is 25 (SMTP), 80 (certbot challenge +
+HTTP→HTTPS redirect), 443 (WSS) — and 1025, for a non-obvious reason: the
+port-25 redirect added in A3 rewrites the packet to port 1025 *before* the
+firewall sees it, so a rule allowing 25 alone would silently drop all inbound
+mail. Exposing 1025 directly is harmless — it reaches the same SMTP service
+with no extra privilege; the redirect exists only so the unprivileged
+container can serve privileged port 25.
+
+```bash
+sudo apt install -y ufw        # present on most Ubuntu images; minimal templates omit it
+sudo ufw allow OpenSSH        # BEFORE enable — or you lock yourself out
+                               # (if ufw errors "no profile", use: ufw allow 22/tcp)
+sudo ufw allow 25/tcp         # belt-and-suspenders if the redirect is ever removed
+sudo ufw allow 80/tcp
+sudo ufw allow 443/tcp
+sudo ufw allow 1025/tcp       # what the redirected mail actually arrives on
+sudo ufw enable
+```
+
+Audit the remaining surface with `sudo ss -tlnp`: expect SSH (22), nginx
+(80/443), and the relay (1025) only — the API binds 127.0.0.1 and should
+never appear on a public address. Anything else gets explained or removed.
+
+**Keys-only SSH** — port 22 with password login is the one remaining exposure
+worth closing (internet bots brute-force it continuously). Order matters:
+prove key login works *before* disabling passwords, or you lock yourself out:
+
+```bash
+# on your workstation:
+ls ~/.ssh/id_*.pub || ssh-keygen -t ed25519
+ssh-copy-id <user>@<VPS_IP>
+ssh -o PasswordAuthentication=no <user>@<VPS_IP> true && echo key login works
+
+# on the VPS — sshd keeps the FIRST value it reads, and Ubuntu cloud images
+# ship /etc/ssh/sshd_config.d/50-cloud-init.conf with "PasswordAuthentication yes",
+# so this drop-in must sort BEFORE it (00-, not 99-):
+sudo tee /etc/ssh/sshd_config.d/00-hardening.conf <<'EOF'
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PermitRootLogin no
+EOF
+sudo sshd -t && sudo systemctl reload ssh
+sudo sshd -T | grep -i passwordauthentication   # must print: passwordauthentication no
+```
+
+Keep your existing SSH session open until a fresh terminal has logged in
+successfully.
 
 ### A2. nginx + TLS
 
@@ -104,9 +149,26 @@ to it (the relay compose file uses host networking):
 
 ```bash
 iptables -t nat -A PREROUTING -p tcp --dport 25 -j REDIRECT --to-port 1025
-# Make persistent (requires iptables-persistent):
-iptables-save > /etc/iptables/rules.v4
+# Make persistent (requires iptables-persistent) — save ONLY the nat table:
+# a full `iptables-save` would restore filter-table rules too and stomp ufw's
+# chains from A1 at boot.
+iptables-save -t nat > /etc/iptables/rules.v4
 ```
+
+If ufw is your firewall, an alternative that keeps one mechanism in charge of
+boot: append the redirect to `/etc/ufw/before.rules` instead (ufw reloads it on
+every start), and drop the standalone manual rule:
+
+```bash
+printf '\n*nat\n:PREROUTING ACCEPT [0:0]\n-A PREROUTING -p tcp --dport 25 -j REDIRECT --to-port 1025\nCOMMIT\n' >> /etc/ufw/before.rules
+ufw reload
+iptables -t nat -D PREROUTING -p tcp --dport 25 -j REDIRECT --to-port 1025
+```
+
+(One warning from the field: a ufw that was previously installed and then
+removed can leave stale `/etc/ufw/*` state behind — if `ufw allow` errors with
+"problem running" on a never-enabled firewall, `ufw enable` first to bootstrap
+the kernel chains, then add rules.)
 
 ### A4. Configure
 
