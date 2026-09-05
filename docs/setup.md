@@ -91,6 +91,7 @@ container can serve privileged port 25.
 ```bash
 sudo apt install -y ufw        # present on most Ubuntu images; minimal templates omit it
 sudo ufw allow OpenSSH        # BEFORE enable — or you lock yourself out
+                               # (if ufw errors "no profile", use: ufw allow 22/tcp)
 sudo ufw allow 25/tcp         # belt-and-suspenders if the redirect is ever removed
 sudo ufw allow 80/tcp
 sudo ufw allow 443/tcp
