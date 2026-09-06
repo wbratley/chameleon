@@ -121,7 +121,7 @@ async def _handle_deliver(
         await ws.send_json({"type": "ack", "id": msg_id})
     except Exception as exc:
         # No ack — relay retains the message as pending and resends on reconnect
-        logger.error("delivery_failed id=%d error=%s", msg_id, type(exc).__name__)
+        logger.error("delivery_failed id=%d error=%r", msg_id, exc)
 
 
 async def run_client(settings: LocalSettings, alias_db: AliasDB) -> None:
