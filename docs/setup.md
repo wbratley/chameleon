@@ -80,6 +80,14 @@ mail   A       <VPS_IP>
 relay  A       <VPS_IP>
 ```
 
+MX-target trap: your DNS panel may auto-append the zone to whatever you
+type. Entering `mail.yourdomain.com` in such a panel silently produces
+`mail.yourdomain.com.yourdomain.com` — a nonexistent host that defers all
+inbound mail for hours while every server-side check passes (the mail server
+never even sees a connection). Enter just `mail`, or the full name with a
+trailing dot. Verify with `dig +short MX yourdomain.com` — it must print
+exactly one suffix.
+
 Open ports 25 (SMTP), 80 (certbot challenge + HTTP→HTTPS redirect) and 443
 (WSS) in the VPS firewall.
 
