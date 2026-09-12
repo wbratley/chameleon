@@ -140,8 +140,34 @@ Optional:
   secure-deleted. Raise it to tolerate longer outages, lower it to shrink the
   data-at-rest window.
 - `CHAMELEON_TLS_CERT_PATH` / `CHAMELEON_TLS_KEY_PATH` — STARTTLS for inbound
-  SMTP. Note: if you enable these you must also mount the cert/key files into
-  the container by adding a `volumes:` entry to `docker-compose.relay.yml`.
+  SMTP. Without them the relay receives in the clear (the only plaintext leg
+  in the system: mail is sealed to the local key before queueing, and the
+  pull leg is already `wss://`). To enable:
+
+  ```bash
+  # Cert for the MX name (HTTP-01 via nginx, which is already on :80)
+  sudo certbot certonly --nginx -d mail.yourdomain.com
+  ```
+
+  Set the env vars to `/etc/letsencrypt/live/mail.yourdomain.com/fullchain.pem`
+  and `.../privkey.pem`, and mount **both** `live/` and `archive/` read-only in
+  `docker-compose.relay.yml` — `live/` holds symlinks into `archive/`, so
+  mounting only `live/` gives the container dangling links. Then
+  `docker compose -f docker-compose.relay.yml up -d` (recreate, not `restart` —
+  `env_file` is only read on recreate).
+
+  Certbot renews every ~60 days but the running process keeps its startup
+  copy; self-heal with a deploy hook that restarts the container:
+
+  ```bash
+  echo 'cd <your checkout> && docker compose -f docker-compose.relay.yml restart relay' \
+    | sudo tee /etc/letsencrypt/renewal-hooks/deploy/chameleon-relay.sh
+  sudo chmod +x /etc/letsencrypt/renewal-hooks/deploy/chameleon-relay.sh
+  ```
+
+  Verify with `openssl s_client -starttls smtp -connect mail.yourdomain.com:25`;
+  mail from major senders then shows `with ESMTPS` in its `Received:` header
+  (the S = TLS). Keep it opportunistic — do not reject plaintext senders.
 
 ### A5. Build and start
 
