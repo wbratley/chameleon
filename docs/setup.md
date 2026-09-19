@@ -156,12 +156,27 @@ Optional:
   `docker compose -f docker-compose.relay.yml up -d` (recreate, not `restart` —
   `env_file` is only read on recreate).
 
-  Certbot renews every ~60 days but the running process keeps its startup
-  copy; self-heal with a deploy hook that restarts the container:
+  Permission trap: certbot keeps `live/`/`archive/` as `root:root` mode 0700,
+  but the relay container runs as uid/gid 1000 (`chameleon` in the Dockerfile)
+  — startup dies with `PermissionError` in `load_cert_chain`. Grant the
+  container's group read access before starting:
 
   ```bash
-  echo 'cd <your checkout> && docker compose -f docker-compose.relay.yml restart relay' \
-    | sudo tee /etc/letsencrypt/renewal-hooks/deploy/chameleon-relay.sh
+  sudo chgrp -R 1000 /etc/letsencrypt/live /etc/letsencrypt/archive
+  sudo chmod -R g+rX /etc/letsencrypt/live /etc/letsencrypt/archive
+  ```
+
+  Certbot renews every ~60 days but the running process keeps its startup
+  copy, and renewed files come back as `root:root` 0600 — the hook must
+  re-grant the group perms and restart the container:
+
+  ```bash
+  cat <<'HOOK' | sudo tee /etc/letsencrypt/renewal-hooks/deploy/chameleon-relay.sh
+  #!/bin/sh
+  chgrp -R 1000 /etc/letsencrypt/live /etc/letsencrypt/archive
+  chmod -R g+rX /etc/letsencrypt/live /etc/letsencrypt/archive
+  cd <your checkout> && docker compose -f docker-compose.relay.yml restart relay
+  HOOK
   sudo chmod +x /etc/letsencrypt/renewal-hooks/deploy/chameleon-relay.sh
   ```
 
