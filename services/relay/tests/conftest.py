@@ -66,4 +66,5 @@ def session():
     s = MagicMock()
     s.peer = ("1.2.3.4", 40000)
     s.host_name = "mail.external.com"
+    s.ssl = None  # plaintext by default; aiosmtpd sets a dict after STARTTLS
     return s

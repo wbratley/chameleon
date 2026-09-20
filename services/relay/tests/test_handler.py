@@ -174,6 +174,32 @@ async def test_data_received_header_falls_back_to_unknown_host(handler, envelope
     assert b"from unknown" in received_section
 
 
+async def test_data_received_marks_starttls_session(handler, envelope, session):
+    """A session upgraded via STARTTLS gets the RFC 3848 ESMTPS keyword, so
+    MUAs reading the hop chain show it as encrypted."""
+    session.host_name = "mail-sender.example"
+    # aiosmtpd sets session.ssl (to the TLS transport's _extra dict) only
+    # after a successful STARTTLS handshake.
+    session.ssl = {"ssl_object": object()}
+    envelope.content = b"Subject: Test\r\n\r\nBody"
+
+    msg = await _capture_payload(handler, envelope, session)
+
+    received_section = msg[msg.index(b"Received:"):]
+    assert b"with ESMTPS" in received_section
+
+
+async def test_data_received_marks_plaintext_session(handler, envelope, session):
+    """A session that never issued STARTTLS keeps the plain ESMTP keyword."""
+    session.host_name = "mail-sender.example"
+    envelope.content = b"Subject: Test\r\n\r\nBody"  # fixture default: ssl=None (plaintext)
+
+    msg = await _capture_payload(handler, envelope, session)
+
+    received_section = msg[msg.index(b"Received:"):]
+    assert b"with ESMTP;" in received_section
+
+
 async def test_data_received_header_omits_recipient(handler, envelope, session):
     """The Received header must not contain the recipient (no leaky "for" clause)."""
     envelope.rcpt_tos = ["private@example.com"]
