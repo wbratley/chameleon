@@ -76,11 +76,18 @@ class RelayHandler:
         peer_ip = session.peer[0] if session.peer else "unknown"
         host_name = _ascii_hostname(session.host_name)
 
+        # RFC 3848 service-type keyword: ESMTPS marks a session upgraded via
+        # STARTTLS (aiosmtpd populates session.ssl only after the handshake);
+        # plain ESMTP otherwise. MUAs and hop-analysis tools key on this to
+        # show whether the transport was encrypted — a bare ESMTP reads as
+        # plaintext even when the session did upgrade.
+        smtp_with = "ESMTPS" if session.ssl is not None else "ESMTP"
+
         # The "for" clause is intentionally omitted from Received — it would leak the
         # alias address into the message delivered to the user's inbox.
         received = (
             f"Received: from {host_name} ([{peer_ip}])\r\n"
-            f"\tby {self._settings.RELAY_HOSTNAME} (chameleon-relay) with ESMTP;\r\n"
+            f"\tby {self._settings.RELAY_HOSTNAME} (chameleon-relay) with {smtp_with};\r\n"
             f"\t{email.utils.formatdate(localtime=False)}\r\n"
         ).encode("ascii")
 
